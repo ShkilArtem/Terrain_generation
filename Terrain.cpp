@@ -4,6 +4,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
 
+
 Terrain::Terrain(int gridSize, float worldSize)
     : GRID_SIZE(gridSize), WORLD_SIZE(worldSize)
 {
@@ -186,4 +187,59 @@ void Terrain::draw(const Shader& shader) const {
     glBindVertexArray(VAO);
     glDrawElements(GL_TRIANGLES, (GLsizei)indexCount, GL_UNSIGNED_INT, 0);
     glBindVertexArray(0);
+}
+void Terrain::simulateErosion(int iterations) {
+    const int N = GRID_SIZE;
+    auto hRef = [&](int x, int z) -> float& {
+        return vertices[(z * N + x) * 14 + 1];  // y компонента
+        };
+
+    for (int iter = 0; iter < iterations; ++iter) {
+        int cx = rand() % N;
+        int cz = rand() % N;
+        float sediment = 0.0f;
+        float water = 1.0f;
+
+        for (int step = 0; step < 100; ++step) {
+            float& h = hRef(cx, cz);
+
+            // найти самого низкого соседа
+            int lx = cx, lz = cz;
+            float lh = h;
+            for (int dz = -1; dz <= 1; ++dz) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    if (!dx && !dz) continue;
+                    int nx = cx + dx, nz = cz + dz;
+                    if (nx < 0 || nx >= N || nz < 0 || nz >= N) continue;
+                    float nh = hRef(nx, nz);
+                    if (nh < lh) { lh = nh; lx = nx; lz = nz; }
+                }
+            }
+
+            float dh = h - lh;
+            if (dh <= 0.0f) { h += sediment; break; }
+
+            float cap = dh * 0.1f * water;   // можно вынести в параметры ImGui
+
+            if (sediment > cap) {
+                float dep = (sediment - cap) * 0.5f;
+                sediment -= dep;
+                h += dep;
+            }
+            else {
+                float er = std::min((cap - sediment) * 0.2f, h);
+                sediment += er;
+                h -= er;
+            }
+
+            cx = lx; cz = lz;
+            water *= 0.9f;
+            if (water < 0.01f) { hRef(cx, cz) += sediment; break; }
+        }
+    }
+
+    computeNormals();
+    computeTangents(); // см. пункт 2
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(float), vertices.data());
 }

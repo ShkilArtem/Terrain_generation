@@ -13,7 +13,7 @@ public:
     // Параметры: амплитуда шума, частота, октавы, смещение
     void generate(float amplitude, float frequency, int octaves, float offset);
     void draw(const Shader& shader) const;
-
+    void simulateErosion(int iterations);
 private:
     int   GRID_SIZE;
     float WORLD_SIZE;

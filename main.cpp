@@ -45,6 +45,8 @@ void mouse_callback(GLFWwindow* /*wnd*/, double xpos, double ypos) {
 
 
 int main() {
+
+    srand(time(NULL));
     // GLFW
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -161,6 +163,8 @@ int main() {
     float diffuseIntensity = 4.4f;
     float specularIntensity = 0.4f;
 
+    bool erosionRunning = false;
+
     float el = glm::radians(sunElevationDeg);
     float az = glm::radians(sunAzimuthDeg);
     glm::vec3 L = glm::normalize(glm::vec3(
@@ -215,6 +219,7 @@ int main() {
             static float ambientInt = ambientIntensity;
             static float diffuseInt = diffuseIntensity;
             static float specularInt = specularIntensity;
+            static int iterations = 1000;
 
             ImGui::Begin("Terrain");
 
@@ -227,6 +232,12 @@ int main() {
             if (ImGui::SliderFloat("Ambient", &ambientInt, 0.0f, 5.0f));
             if (ImGui::SliderFloat("Diffuse", &diffuseInt, 0.0f, 20.0f));
             if (ImGui::SliderFloat("Specular", &specularInt, 0.0f, 2.0f));
+
+            if (ImGui::Button(erosionRunning ? "Stop Erosion" : "Start Erosion")) {
+                // Toggle the erosion simulation on/off
+                erosionRunning = !erosionRunning;
+            }
+            if (ImGui::SliderInt("Iterations", &iterations, 10, 3000));
 
             ImGui::End();
             {
@@ -244,6 +255,9 @@ int main() {
                     cos(el) * sin(az)
                 ));
                 sunDir = L;
+            }
+            if (erosionRunning) {
+                terrain.simulateErosion(iterations);
             }
         }
 
