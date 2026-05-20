@@ -6,6 +6,13 @@
 #include <iostream>
 
 namespace {
+    const int VERTEX_STRIDE = 15;
+    const int POSITION_OFFSET = 0;
+    const int NORMAL_OFFSET = 3;
+    const int UV_OFFSET = 6;
+    const int TANGENT_OFFSET = 8;
+    const int EROSION_OFFSET = 14;
+
     const int PERLIN_PERMUTATION[256] = {
         151, 160, 137, 91, 90, 15, 131, 13, 201, 95, 96, 53, 194, 233, 7, 225,
         140, 36, 103, 30, 69, 142, 8, 99, 37, 240, 21, 10, 23, 190, 6, 148,
@@ -111,7 +118,7 @@ void Terrain::generate(float amplitude, float frequency, int octaves, float offs
     const float safeLacunarity = std::max(1.01f, lacunarity);
     const float safeHeightPower = std::max(0.10f, heightPower);
     vertices.clear();
-    vertices.reserve(N * N * 14);
+    vertices.reserve(N * N * VERTEX_STRIDE);
 
     // 1) генерим позиции, нормали-заглушки, UV, тангенты-заглушки
     for (int z = 0; z < N; ++z) {
@@ -150,6 +157,8 @@ void Terrain::generate(float amplitude, float frequency, int octaves, float offs
             vertices.insert(vertices.end(), { 0.0f, 0.0f, 0.0f });
             // bitangent placeholder
             vertices.insert(vertices.end(), { 0.0f, 0.0f, 0.0f });
+            // signed erosion heat value: negative=eroded, positive=deposited
+            vertices.push_back(0.0f);
         }
     }
 
@@ -180,9 +189,9 @@ void Terrain::computeNormals() {
 
     auto pos = [&](int idx) {
         return glm::vec3(
-            vertices[idx * 14 + 0],
-            vertices[idx * 14 + 1],
-            vertices[idx * 14 + 2]
+            vertices[idx * VERTEX_STRIDE + POSITION_OFFSET + 0],
+            vertices[idx * VERTEX_STRIDE + POSITION_OFFSET + 1],
+            vertices[idx * VERTEX_STRIDE + POSITION_OFFSET + 2]
         );
         };
 
@@ -196,7 +205,7 @@ void Terrain::computeNormals() {
     }
     for (int i = 0; i < N * N; ++i) {
         glm::vec3 n = glm::normalize(norms[i]);
-        float* f = &vertices[i * 14] + 3;
+        float* f = &vertices[i * VERTEX_STRIDE] + NORMAL_OFFSET;
         f[0] = n.x; f[1] = n.y; f[2] = n.z;
     }
 }
@@ -207,15 +216,15 @@ void Terrain::computeTangents() {
     std::vector<glm::vec3> bits(N * N, glm::vec3(0.0f));
 
     auto pos = [&](int idx) {
-        float* f = &vertices[idx * 14];
+        float* f = &vertices[idx * VERTEX_STRIDE];
         return glm::vec3(f[0], f[1], f[2]);
         };
     auto uv = [&](int idx) {
-        float* f = &vertices[idx * 14] + 6;
+        float* f = &vertices[idx * VERTEX_STRIDE] + UV_OFFSET;
         return glm::vec2(f[0], f[1]);
         };
     auto norm = [&](int idx) {
-        float* f = &vertices[idx * 14] + 3;
+        float* f = &vertices[idx * VERTEX_STRIDE] + NORMAL_OFFSET;
         return glm::vec3(f[0], f[1], f[2]);
         };
 
@@ -244,7 +253,7 @@ void Terrain::computeTangents() {
         T = glm::normalize(T - Nrm * glm::dot(Nrm, T));
         glm::vec3 B = glm::normalize(glm::cross(Nrm, T));
 
-        float* f = &vertices[i * 14] + 8;
+        float* f = &vertices[i * VERTEX_STRIDE] + TANGENT_OFFSET;
         f[0] = T.x; f[1] = T.y; f[2] = T.z;
         f[3] = B.x; f[4] = B.y; f[5] = B.z;
     }
@@ -259,22 +268,25 @@ void Terrain::setupMesh() {
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned),
         indices.data(), GL_STATIC_DRAW);
 
-    GLsizei stride = 14 * sizeof(float);
+    GLsizei stride = VERTEX_STRIDE * sizeof(float);
     // aPos
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0);
     // aNormal
     glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float)));
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)(NORMAL_OFFSET * sizeof(float)));
     // aTexCoord
     glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*)(6 * sizeof(float)));
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*)(UV_OFFSET * sizeof(float)));
     // aTangent
     glEnableVertexAttribArray(3);
-    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, stride, (void*)(8 * sizeof(float)));
+    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, stride, (void*)(TANGENT_OFFSET * sizeof(float)));
     // aBitangent
     glEnableVertexAttribArray(4);
-    glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, stride, (void*)(11 * sizeof(float)));
+    glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, stride, (void*)((TANGENT_OFFSET + 3) * sizeof(float)));
+    // aErosionDelta
+    glEnableVertexAttribArray(5);
+    glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, stride, (void*)(EROSION_OFFSET * sizeof(float)));
 
     glBindVertexArray(0);
 }
@@ -284,10 +296,22 @@ void Terrain::draw(const Shader& shader) const {
     glDrawElements(GL_TRIANGLES, (GLsizei)indexCount, GL_UNSIGNED_INT, 0);
     glBindVertexArray(0);
 }
+void Terrain::clearErosionHeatmap() {
+    const int N = GRID_SIZE;
+    for (int i = 0; i < N * N; ++i) {
+        vertices[i * VERTEX_STRIDE + EROSION_OFFSET] = 0.0f;
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(float), vertices.data());
+}
 void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
     const int N = GRID_SIZE;
     auto hRef = [&](int x, int z) -> float& {
-        return vertices[(z * N + x) * 14 + 1];  // y компонента
+        return vertices[(z * N + x) * VERTEX_STRIDE + POSITION_OFFSET + 1];  // y компонента
+        };
+    auto erosionRef = [&](int x, int z) -> float& {
+        return vertices[(z * N + x) * VERTEX_STRIDE + EROSION_OFFSET];
         };
 
     const int maxSteps = std::max(1, settings.maxSteps);
@@ -321,7 +345,7 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
             }
 
             float dh = h - lh;
-            if (dh <= 0.0f) { h += sediment; break; }
+            if (dh <= 0.0f) { h += sediment; erosionRef(cx, cz) += sediment; break; }
 
             float cap = dh * capacityScale * water;
 
@@ -329,16 +353,18 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
                 float dep = (sediment - cap) * depositionRate;
                 sediment -= dep;
                 h += dep;
+                erosionRef(cx, cz) += dep;
             }
             else {
                 float er = std::min((cap - sediment) * erosionRate, h);
                 sediment += er;
                 h -= er;
+                erosionRef(cx, cz) -= er;
             }
 
             cx = lx; cz = lz;
             water *= 1.0f - evaporation;
-            if (water < minWater) { hRef(cx, cz) += sediment; break; }
+            if (water < minWater) { hRef(cx, cz) += sediment; erosionRef(cx, cz) += sediment; break; }
         }
     }
 

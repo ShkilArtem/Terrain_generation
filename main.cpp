@@ -106,13 +106,9 @@ int main() {
     float specularIntensity = 0.4f;
     glm::vec3 sunColor(1.00f, 0.98f, 0.60f);
 
-    float grassToRockStart = 8.0f;
-    float grassToRockEnd = 12.0f;
-    float rockToSnowStart = 18.0f;
-    float rockToSnowEnd = 20.0f;
-    glm::vec3 grassColor(0.30f, 0.58f, 0.24f);
-    glm::vec3 rockColor(0.48f, 0.45f, 0.40f);
-    glm::vec3 snowColor(0.92f, 0.94f, 0.90f);
+    glm::vec3 terrainColor(0.47f, 0.42f, 0.32f);
+    bool showErosionHeatmap = false;
+    float heatmapScale = 12.0f;
 
     bool erosionRunning = false;
     int erosionIterationsPerFrame = 350;
@@ -212,19 +208,18 @@ int main() {
                 }
             }
 
-            if (ImGui::CollapsingHeader("Material Heights", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::SliderFloat("Grass to rock start", &grassToRockStart, -20.0f, 100.0f);
-                ImGui::SliderFloat("Grass to rock end", &grassToRockEnd, -20.0f, 100.0f);
-                ImGui::SliderFloat("Rock to snow start", &rockToSnowStart, -20.0f, 150.0f);
-                ImGui::SliderFloat("Rock to snow end", &rockToSnowEnd, -20.0f, 150.0f);
-                ImGui::ColorEdit3("Grass color", (float*)&grassColor);
-                ImGui::ColorEdit3("Rock color", (float*)&rockColor);
-                ImGui::ColorEdit3("Snow color", (float*)&snowColor);
+            if (ImGui::CollapsingHeader("Visualization", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::ColorEdit3("Terrain color", (float*)&terrainColor);
+                ImGui::Checkbox("Erosion heatmap", &showErosionHeatmap);
+                ImGui::SliderFloat("Heatmap intensity", &heatmapScale, 1.0f, 80.0f);
+                if (ImGui::Button("Clear heatmap")) {
+                    terrain.clearErosionHeatmap();
+                }
             }
 
             if (ImGui::CollapsingHeader("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::SliderFloat("Sun Azimuth", &sunAzimuthDeg, 0.0f, 360.0f);
-                ImGui::SliderFloat("Sun Elevation", &sunElevationDeg, 0.0f, 90.0f);
+                ImGui::SliderFloat("Sun Elevation", &sunElevationDeg, 0.0f, 360.0f);
                 ImGui::ColorEdit3("Sun Color", (float*)&sunColor);
                 ImGui::SliderFloat("Ambient", &ambientIntensity, 0.0f, 5.0f);
                 ImGui::SliderFloat("Diffuse", &diffuseIntensity, 0.0f, 20.0f);
@@ -249,7 +244,7 @@ int main() {
 
 
         // рендер
-        glClearColor(0.1f, 0.1f, 0.2f, 1.0f);
+        glClearColor(0.08f, 0.10f, 0.12f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         terrainShader.use();
@@ -272,13 +267,9 @@ int main() {
         terrainShader.setVec3("lightColor", sunColor * diffuseIntensity);
         terrainShader.setFloat("ambientFactor", ambientIntensity);
         terrainShader.setFloat("specularFactor", specularIntensity);
-        terrainShader.setFloat("grassToRockStart", grassToRockStart);
-        terrainShader.setFloat("grassToRockEnd", grassToRockEnd);
-        terrainShader.setFloat("rockToSnowStart", rockToSnowStart);
-        terrainShader.setFloat("rockToSnowEnd", rockToSnowEnd);
-        terrainShader.setVec3("grassColor", grassColor);
-        terrainShader.setVec3("rockColor", rockColor);
-        terrainShader.setVec3("snowColor", snowColor);
+        terrainShader.setVec3("terrainColor", terrainColor);
+        terrainShader.setBool("showErosionHeatmap", showErosionHeatmap);
+        terrainShader.setFloat("heatmapScale", heatmapScale);
 
         terrain.draw(terrainShader);
 

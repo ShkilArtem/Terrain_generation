@@ -30,13 +30,14 @@ public:
         float persistence, float lacunarity, float heightPower);
     void draw(const Shader& shader) const;
     void simulateErosion(int iterations, const ErosionSettings& settings);
+    void clearErosionHeatmap();
 private:
     int   GRID_SIZE;
     float WORLD_SIZE;
     GLuint VAO, VBO, EBO;
     size_t indexCount;
 
-    // x,y,z | nx,ny,nz | tx,ty | tan.x,y,z | bitan.x,y,z  => 14 float
+    // x,y,z | nx,ny,nz | uv | tangent | bitangent | erosionDelta => 15 floats
     std::vector<float> vertices;
     std::vector<unsigned int> indices;
 
