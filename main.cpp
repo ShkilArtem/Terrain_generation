@@ -104,7 +104,7 @@ int main() {
     float ambientIntensity = 0.23f;
     float diffuseIntensity = 4.4f;
     float specularIntensity = 0.4f;
-    glm::vec3 sunColor(1.00f, 0.98f, 0.60f);
+    glm::vec3 sunColor(1.00f, 1.00f, 1.00f);
 
     glm::vec3 terrainColor(0.47f, 0.42f, 0.32f);
     bool showErosionHeatmap = false;
@@ -201,6 +201,10 @@ int main() {
                 ImGui::SliderFloat("Capacity scale", &erosionSettings.capacityScale, 0.0f, 2.0f);
                 ImGui::SliderFloat("Deposition rate", &erosionSettings.depositionRate, 0.0f, 1.0f);
                 ImGui::SliderFloat("Erosion rate", &erosionSettings.erosionRate, 0.0f, 1.0f);
+                ImGui::SliderFloat("Inertia", &erosionSettings.inertia, 0.0f, 0.99f);
+                ImGui::SliderInt("Thermal passes", &erosionSettings.thermalIterations, 0, 20);
+                ImGui::SliderFloat("Thermal talus", &erosionSettings.thermalTalus, 0.0f, 0.5f);
+                ImGui::SliderFloat("Thermal strength", &erosionSettings.thermalStrength, 0.0f, 0.5f);
                 ImGui::SliderFloat("Min water", &erosionSettings.minWater, 0.0f, 0.5f);
                 if (ImGui::Button("Recommended erosion")) {
                     erosionIterationsPerFrame = 350;

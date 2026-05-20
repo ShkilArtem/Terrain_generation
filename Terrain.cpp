@@ -308,10 +308,78 @@ void Terrain::clearErosionHeatmap() {
 void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
     const int N = GRID_SIZE;
     auto hRef = [&](int x, int z) -> float& {
-        return vertices[(z * N + x) * VERTEX_STRIDE + POSITION_OFFSET + 1];  // y компонента
+        return vertices[(z * N + x) * VERTEX_STRIDE + POSITION_OFFSET + 1];
         };
     auto erosionRef = [&](int x, int z) -> float& {
         return vertices[(z * N + x) * VERTEX_STRIDE + EROSION_OFFSET];
+        };
+    auto random01 = []() -> float {
+        return static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+        };
+
+    struct HeightGradient {
+        float height;
+        float gradX;
+        float gradZ;
+    };
+
+    auto sampleHeightGradient = [&](float x, float z) -> HeightGradient {
+        x = std::max(0.0f, std::min(static_cast<float>(N - 1) - 0.001f, x));
+        z = std::max(0.0f, std::min(static_cast<float>(N - 1) - 0.001f, z));
+
+        int x0 = static_cast<int>(std::floor(x));
+        int z0 = static_cast<int>(std::floor(z));
+        x0 = std::max(0, std::min(N - 2, x0));
+        z0 = std::max(0, std::min(N - 2, z0));
+        int x1 = x0 + 1;
+        int z1 = z0 + 1;
+
+        float tx = x - static_cast<float>(x0);
+        float tz = z - static_cast<float>(z0);
+
+        float h00 = hRef(x0, z0);
+        float h10 = hRef(x1, z0);
+        float h01 = hRef(x0, z1);
+        float h11 = hRef(x1, z1);
+
+        HeightGradient result;
+        result.height = h00 * (1.0f - tx) * (1.0f - tz)
+            + h10 * tx * (1.0f - tz)
+            + h01 * (1.0f - tx) * tz
+            + h11 * tx * tz;
+        result.gradX = (h10 - h00) * (1.0f - tz) + (h11 - h01) * tz;
+        result.gradZ = (h01 - h00) * (1.0f - tx) + (h11 - h10) * tx;
+        return result;
+        };
+
+    auto applyHeightDelta = [&](float x, float z, float delta) {
+        x = std::max(0.0f, std::min(static_cast<float>(N - 1) - 0.001f, x));
+        z = std::max(0.0f, std::min(static_cast<float>(N - 1) - 0.001f, z));
+
+        int x0 = static_cast<int>(std::floor(x));
+        int z0 = static_cast<int>(std::floor(z));
+        x0 = std::max(0, std::min(N - 2, x0));
+        z0 = std::max(0, std::min(N - 2, z0));
+        int x1 = x0 + 1;
+        int z1 = z0 + 1;
+
+        float tx = x - static_cast<float>(x0);
+        float tz = z - static_cast<float>(z0);
+        float w00 = (1.0f - tx) * (1.0f - tz);
+        float w10 = tx * (1.0f - tz);
+        float w01 = (1.0f - tx) * tz;
+        float w11 = tx * tz;
+
+        auto applyVertex = [&](int vx, int vz, float weight) {
+            float weightedDelta = delta * weight;
+            hRef(vx, vz) = std::max(0.0f, hRef(vx, vz) + weightedDelta);
+            erosionRef(vx, vz) += weightedDelta;
+            };
+
+        applyVertex(x0, z0, w00);
+        applyVertex(x1, z0, w10);
+        applyVertex(x0, z1, w01);
+        applyVertex(x1, z1, w11);
         };
 
     const int maxSteps = std::max(1, settings.maxSteps);
@@ -320,56 +388,112 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
     const float capacityScale = std::max(0.0f, settings.capacityScale);
     const float depositionRate = std::max(0.0f, std::min(1.0f, settings.depositionRate));
     const float erosionRate = std::max(0.0f, std::min(1.0f, settings.erosionRate));
+    const float inertia = std::max(0.0f, std::min(0.99f, settings.inertia));
+    const int thermalIterations = std::max(0, settings.thermalIterations);
+    const float thermalTalus = std::max(0.0f, settings.thermalTalus);
+    const float thermalStrength = std::max(0.0f, std::min(1.0f, settings.thermalStrength));
     const float minWater = std::max(0.0f, settings.minWater);
 
     for (int iter = 0; iter < iterations; ++iter) {
-        int cx = rand() % N;
-        int cz = rand() % N;
+        float posX = random01() * static_cast<float>(N - 1);
+        float posZ = random01() * static_cast<float>(N - 1);
+        float dirX = 0.0f;
+        float dirZ = 0.0f;
         float sediment = 0.0f;
         float water = initialWater;
 
         for (int step = 0; step < maxSteps; ++step) {
-            float& h = hRef(cx, cz);
+            HeightGradient current = sampleHeightGradient(posX, posZ);
 
-            // найти самого низкого соседа
-            int lx = cx, lz = cz;
-            float lh = h;
-            for (int dz = -1; dz <= 1; ++dz) {
-                for (int dx = -1; dx <= 1; ++dx) {
-                    if (!dx && !dz) continue;
-                    int nx = cx + dx, nz = cz + dz;
-                    if (nx < 0 || nx >= N || nz < 0 || nz >= N) continue;
-                    float nh = hRef(nx, nz);
-                    if (nh < lh) { lh = nh; lx = nx; lz = nz; }
-                }
+            dirX = dirX * inertia - current.gradX * (1.0f - inertia);
+            dirZ = dirZ * inertia - current.gradZ * (1.0f - inertia);
+            float dirLength = std::sqrt(dirX * dirX + dirZ * dirZ);
+            if (dirLength < 0.0001f) {
+                applyHeightDelta(posX, posZ, sediment);
+                break;
+            }
+            dirX /= dirLength;
+            dirZ /= dirLength;
+
+            float nextX = posX + dirX;
+            float nextZ = posZ + dirZ;
+            if (nextX < 0.0f || nextX >= static_cast<float>(N - 1)
+                || nextZ < 0.0f || nextZ >= static_cast<float>(N - 1)) {
+                applyHeightDelta(posX, posZ, sediment);
+                break;
             }
 
-            float dh = h - lh;
-            if (dh <= 0.0f) { h += sediment; erosionRef(cx, cz) += sediment; break; }
+            HeightGradient next = sampleHeightGradient(nextX, nextZ);
+            float heightDelta = next.height - current.height;
+            float capacity = std::max(-heightDelta * capacityScale * water, 0.0f);
 
-            float cap = dh * capacityScale * water;
-
-            if (sediment > cap) {
-                float dep = (sediment - cap) * depositionRate;
-                sediment -= dep;
-                h += dep;
-                erosionRef(cx, cz) += dep;
+            if (heightDelta > 0.0f || sediment > capacity) {
+                float depositAmount = heightDelta > 0.0f
+                    ? std::min(sediment, heightDelta)
+                    : (sediment - capacity) * depositionRate;
+                sediment -= depositAmount;
+                applyHeightDelta(posX, posZ, depositAmount);
             }
             else {
-                float er = std::min((cap - sediment) * erosionRate, h);
-                sediment += er;
-                h -= er;
-                erosionRef(cx, cz) -= er;
+                float erodeAmount = std::min((capacity - sediment) * erosionRate, current.height);
+                sediment += erodeAmount;
+                applyHeightDelta(posX, posZ, -erodeAmount);
             }
 
-            cx = lx; cz = lz;
+            posX = nextX;
+            posZ = nextZ;
             water *= 1.0f - evaporation;
-            if (water < minWater) { hRef(cx, cz) += sediment; erosionRef(cx, cz) += sediment; break; }
+            if (water < minWater) {
+                applyHeightDelta(posX, posZ, sediment);
+                break;
+            }
         }
     }
 
+
+    std::vector<float> heightDeltas(N * N, 0.0f);
+    const int neighborOffsets[8][2] = {
+        {-1, -1}, {0, -1}, {1, -1},
+        {-1,  0},          {1,  0},
+        {-1,  1}, {0,  1}, {1,  1}
+    };
+
+    for (int pass = 0; pass < thermalIterations; ++pass) {
+        std::fill(heightDeltas.begin(), heightDeltas.end(), 0.0f);
+
+        for (int z = 1; z < N - 1; ++z) {
+            for (int x = 1; x < N - 1; ++x) {
+                float centerHeight = hRef(x, z);
+                for (const auto& offset : neighborOffsets) {
+                    int nx = x + offset[0];
+                    int nz = z + offset[1];
+                    float diff = centerHeight - hRef(nx, nz);
+                    if (diff <= thermalTalus) {
+                        continue;
+                    }
+
+                    float transfer = (diff - thermalTalus) * thermalStrength * 0.125f;
+                    int centerIndex = z * N + x;
+                    int neighborIndex = nz * N + nx;
+                    heightDeltas[centerIndex] -= transfer;
+                    heightDeltas[neighborIndex] += transfer;
+                }
+            }
+        }
+
+        for (int z = 0; z < N; ++z) {
+            for (int x = 0; x < N; ++x) {
+                float delta = heightDeltas[z * N + x];
+                if (delta == 0.0f) {
+                    continue;
+                }
+                hRef(x, z) = std::max(0.0f, hRef(x, z) + delta);
+                erosionRef(x, z) += delta;
+            }
+        }
+    }
     computeNormals();
-    computeTangents(); // см. пункт 2
+    computeTangents();
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(float), vertices.data());
 }

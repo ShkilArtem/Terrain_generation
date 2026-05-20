@@ -19,6 +19,10 @@ public:
         float capacityScale = 0.35f;
         float depositionRate = 0.18f;
         float erosionRate = 0.10f;
+        float inertia = 0.20f;
+        int thermalIterations = 1;
+        float thermalTalus = 0.05f;
+        float thermalStrength = 0.25f;
         float minWater = 0.01f;
     };
 
