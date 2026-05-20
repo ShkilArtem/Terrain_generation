@@ -88,7 +88,7 @@ int main() {
     Shader terrainShader("shaders/terrain.vert", "shaders/terrain.frag");
 
     // עוננוים
-    Terrain terrain(128, 64.0f);
+    Terrain terrain(128, 128.0f);
     float terrainAmplitude = 42.0f;
     float terrainFrequency = 0.035f;
     int terrainOctaves = 6;
@@ -154,10 +154,10 @@ int main() {
     GLuint grassRoughnessTex = loadTex("textures/Grass004_1K_JPG_Roughness.jpg");
     GLuint grassAOTex = loadTex("textures/Grass004_1K_JPG_AmbientOcclusion.jpg");
     //Rock
-    GLuint rockAlbedoTex = loadTex("textures/Rock011_1K-JPG_Color.jpg");
-    GLuint rockNormalTex = loadTex("textures/Rock011_1K-JPG_NormalGL.jpg");
-    GLuint rockRoughnessTex = loadTex("textures/Rock011_1K-JPG_Roughness.jpg");
-    GLuint rockAOTex = loadTex("textures/Rock011_1K-JPG_AmbientOcclusion.jpg");
+    GLuint rockAlbedoTex = loadTex("textures/rock_surface_diff_1k.jpg");
+    GLuint rockNormalTex = loadTex("textures/rock_surface_nor_gl_1k.jpg");
+    GLuint rockRoughnessTex = loadTex("textures/rock_surface_rough_1k.jpg");
+    GLuint rockAOTex = loadTex("textures/rock_surface_ao_1k.jpg");
     //Snow
     GLuint snowAlbedoTex = loadTex("textures/Snow004_1K-JPG_Color.jpg");
     GLuint snowNormalTex = loadTex("textures/Snow004_1K-JPG_NormalGL.jpg");
