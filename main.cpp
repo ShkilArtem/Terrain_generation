@@ -86,7 +86,7 @@ int main() {
     Shader terrainShader("shaders/terrain.vert", "shaders/terrain.frag");
 
     // террейн
-    Terrain terrain(128, 64.0f);
+    Terrain terrain(128, 128.0f);
     terrain.generate(50.0f, 0.04f, 4, 0.0f);
 
     // текстуры
@@ -139,26 +139,24 @@ int main() {
 
 
     //Grass
-    GLuint grassAlbedoTex = loadTex("textures/Grass004_1K_JPG_Color.jpg");
-    GLuint grassNormalTex = loadTex("textures/Grass004_1K_JPG_NormalGL.jpg");
-    GLuint grassRoughnessTex = loadTex("textures/Grass004_1K_JPG_Roughness.jpg");
-    GLuint grassAOTex = loadTex("textures/Grass004_1K_JPG_AmbientOcclusion.jpg");
+    GLuint grassAlbedoTex = loadTex("textures/rocky_terrain_02_diff_1k.jpg");
+    GLuint grassNormalTex = loadTex("textures/rocky_terrain_02_nor_gl_1k.jpg");
+    GLuint grassRoughnessTex = loadTex("textures/rocky_terrain_02_rough_1k.jpg");
+    GLuint grassAOTex = loadTex("textures/rocky_terrain_02_ao_1k.jpg");
     //Rock
-    GLuint rockAlbedoTex = loadTex("textures/Rock011_1K-JPG_Color.jpg");
-    GLuint rockNormalTex = loadTex("textures/Rock011_1K-JPG_NormalGL.jpg");
-    GLuint rockRoughnessTex = loadTex("textures/Rock011_1K-JPG_Roughness.jpg");
-    GLuint rockAOTex = loadTex("textures/Rock011_1K-JPG_AmbientOcclusion.jpg");
+    GLuint rockAlbedoTex = loadTex("textures/rock_01_diff_1k.jpg");
+    GLuint rockNormalTex = loadTex("textures/rock_01_nor_gl_1k.jpg");
+    GLuint rockRoughnessTex = loadTex("textures/rock_01_rough_1k.jpg");
+    GLuint rockAOTex = loadTex("textures/rock_01_ao_1k.jpg");
     //Snow
     GLuint snowAlbedoTex = loadTex("textures/Snow004_1K-JPG_Color.jpg");
     GLuint snowNormalTex = loadTex("textures/Snow004_1K-JPG_NormalGL.jpg");
     GLuint snowRoughnessTex = loadTex("textures/Snow004_1K-JPG_Roughness.jpg");
 
 
-    // shadow map setup omitted for brevity...
-    // lightSpaceMatrix, FBO и depthTexture надо создать здесь
 
     float sunElevationDeg = 15.0f;               // угол возвышения над горизонтом
-    float sunAzimuthDeg = 0.0f;               // направление по горизонтали (по желанию)
+    float sunAzimuthDeg = 0.0f;               // направление по горизонтали 
     float ambientIntensity = 0.23f;
     float diffuseIntensity = 4.4f;
     float specularIntensity = 0.4f;
@@ -223,7 +221,7 @@ int main() {
 
             ImGui::Begin("Terrain");
 
-            if (ImGui::SliderFloat("Amplitude", &amp, 0, 100)) terrain.generate(amp, freq, oct, ofs);
+            if (ImGui::SliderFloat("Amplitude", &amp, 0, 300)) terrain.generate(amp, freq, oct, ofs);
             if (ImGui::SliderFloat("Frequency", &freq, 0, 0.1f)) terrain.generate(amp, freq, oct, ofs);
             if (ImGui::SliderInt("Octaves", &oct, 1, 8))     terrain.generate(amp, freq, oct, ofs);
             if (ImGui::SliderFloat("Offset", &ofs, -1000, 1000)) terrain.generate(amp, freq, oct, ofs);

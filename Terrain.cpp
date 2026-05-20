@@ -41,7 +41,7 @@ void Terrain::generate(float amplitude, float frequency, int octaves, float offs
                 amp *= 0.5f;
             }
             n = (n / maxA)* 0.5f + 0.5f;
-            n = pow(n, 2.0f);
+            n = pow(n, 3.0f);
             float yPos = n * amplitude;
 
             // push: pos
@@ -219,7 +219,7 @@ void Terrain::simulateErosion(int iterations) {
             float dh = h - lh;
             if (dh <= 0.0f) { h += sediment; break; }
 
-            float cap = dh * 0.1f * water;   // можно вынести в параметры ImGui
+            float cap = dh * 0.2f * water;   
 
             if (sediment > cap) {
                 float dep = (sediment - cap) * 0.5f;
@@ -239,7 +239,7 @@ void Terrain::simulateErosion(int iterations) {
     }
 
     computeNormals();
-    computeTangents(); // см. пункт 2
+    computeTangents(); 
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(float), vertices.data());
 }
