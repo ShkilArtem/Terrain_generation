@@ -182,6 +182,8 @@ int main() {
     bool erosionRunning = false;
     int erosionIterationsPerFrame = 350;
     Terrain::ErosionSettings erosionSettings;
+    bool showErosionHeatmap = false;
+    float heatmapScale = 12.0f;
 
     float el = glm::radians(sunElevationDeg);
     float az = glm::radians(sunAzimuthDeg);
@@ -270,10 +272,22 @@ int main() {
                 ImGui::SliderFloat("Capacity scale", &erosionSettings.capacityScale, 0.0f, 2.0f);
                 ImGui::SliderFloat("Deposition rate", &erosionSettings.depositionRate, 0.0f, 1.0f);
                 ImGui::SliderFloat("Erosion rate", &erosionSettings.erosionRate, 0.0f, 1.0f);
+                ImGui::SliderFloat("Inertia", &erosionSettings.inertia, 0.0f, 0.99f);
+                ImGui::SliderInt("Thermal passes", &erosionSettings.thermalIterations, 0, 20);
+                ImGui::SliderFloat("Thermal talus", &erosionSettings.thermalTalus, 0.0f, 1.0f);
+                ImGui::SliderFloat("Thermal strength", &erosionSettings.thermalStrength, 0.0f, 1.0f);
                 ImGui::SliderFloat("Min water", &erosionSettings.minWater, 0.0f, 0.5f);
                 if (ImGui::Button("Recommended erosion")) {
                     erosionIterationsPerFrame = 350;
                     erosionSettings = Terrain::ErosionSettings();
+                }
+            }
+
+            if (ImGui::CollapsingHeader("Visualization", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Checkbox("Erosion heatmap", &showErosionHeatmap);
+                ImGui::SliderFloat("Heatmap intensity", &heatmapScale, 1.0f, 80.0f);
+                if (ImGui::Button("Clear heatmap")) {
+                    terrain.clearErosionHeatmap();
                 }
             }
 
@@ -341,6 +355,8 @@ int main() {
         terrainShader.setFloat("grassToRockEnd", grassToRockEnd);
         terrainShader.setFloat("rockToSnowStart", rockToSnowStart);
         terrainShader.setFloat("rockToSnowEnd", rockToSnowEnd);
+        terrainShader.setBool("showErosionHeatmap", showErosionHeatmap);
+        terrainShader.setFloat("heatmapScale", heatmapScale);
 
         // текстуры
         

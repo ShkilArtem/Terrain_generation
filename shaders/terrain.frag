@@ -5,6 +5,7 @@ in VS_OUT {
     vec3 FragPos;
     vec2 TexCoord;
     mat3 TBN;
+    float ErosionDelta;
 } fs_in;
 
 // Grass
@@ -33,6 +34,8 @@ uniform float grassToRockStart;
 uniform float grassToRockEnd;
 uniform float rockToSnowStart;
 uniform float rockToSnowEnd;
+uniform bool showErosionHeatmap;
+uniform float heatmapScale;
 
 const float PI = 3.14159265359;
 
@@ -136,6 +139,16 @@ void main() {
     vec3 Lo = (kD * albedo/PI + spec * specularFactor) * lightColor * NdotL;
     vec3 ambient = ambientFactor * albedo * ao;
     vec3 color = ambient + Lo;
+
+    if (showErosionHeatmap) {
+        float eroded = clamp(-fs_in.ErosionDelta * heatmapScale, 0.0, 1.0);
+        float deposited = clamp(fs_in.ErosionDelta * heatmapScale, 0.0, 1.0);
+        vec3 neutral = vec3(0.16);
+        vec3 erosionRed = vec3(1.0, 0.08, 0.03);
+        vec3 depositBlue = vec3(0.05, 0.32, 1.0);
+        color = mix(neutral, erosionRed, eroded);
+        color = mix(color, depositBlue, deposited);
+    }
 
     // тонемап + гамма
     color = color/(color+vec3(1.0));

@@ -6,6 +6,13 @@
 #include <iostream>
 
 namespace {
+    const int VERTEX_STRIDE = 15;
+    const int POSITION_OFFSET = 0;
+    const int NORMAL_OFFSET = 3;
+    const int UV_OFFSET = 6;
+    const int TANGENT_OFFSET = 8;
+    const int EROSION_OFFSET = 14;
+
     const int PERLIN_PERMUTATION[256] = {
         151, 160, 137, 91, 90, 15, 131, 13, 201, 95, 96, 53, 194, 233, 7, 225,
         140, 36, 103, 30, 69, 142, 8, 99, 37, 240, 21, 10, 23, 190, 6, 148,
@@ -111,7 +118,7 @@ void Terrain::generate(float amplitude, float frequency, int octaves, float offs
     const float safeLacunarity = std::max(1.01f, lacunarity);
     const float safeHeightPower = std::max(0.10f, heightPower);
     vertices.clear();
-    vertices.reserve(N * N * 14);
+    vertices.reserve(N * N * VERTEX_STRIDE);
 
     // 1) генерим позиции, нормали-заглушки, UV, тангенты-заглушки
     for (int z = 0; z < N; ++z) {
@@ -150,6 +157,8 @@ void Terrain::generate(float amplitude, float frequency, int octaves, float offs
             vertices.insert(vertices.end(), { 0.0f, 0.0f, 0.0f });
             // bitangent placeholder
             vertices.insert(vertices.end(), { 0.0f, 0.0f, 0.0f });
+            // signed erosion heat value: negative=eroded, positive=deposited
+            vertices.push_back(0.0f);
         }
     }
 
@@ -180,9 +189,9 @@ void Terrain::computeNormals() {
 
     auto pos = [&](int idx) {
         return glm::vec3(
-            vertices[idx * 14 + 0],
-            vertices[idx * 14 + 1],
-            vertices[idx * 14 + 2]
+            vertices[idx * VERTEX_STRIDE + POSITION_OFFSET + 0],
+            vertices[idx * VERTEX_STRIDE + POSITION_OFFSET + 1],
+            vertices[idx * VERTEX_STRIDE + POSITION_OFFSET + 2]
         );
         };
 
@@ -196,7 +205,7 @@ void Terrain::computeNormals() {
     }
     for (int i = 0; i < N * N; ++i) {
         glm::vec3 n = glm::normalize(norms[i]);
-        float* f = &vertices[i * 14] + 3;
+        float* f = &vertices[i * VERTEX_STRIDE] + NORMAL_OFFSET;
         f[0] = n.x; f[1] = n.y; f[2] = n.z;
     }
 }
@@ -207,15 +216,15 @@ void Terrain::computeTangents() {
     std::vector<glm::vec3> bits(N * N, glm::vec3(0.0f));
 
     auto pos = [&](int idx) {
-        float* f = &vertices[idx * 14];
+        float* f = &vertices[idx * VERTEX_STRIDE];
         return glm::vec3(f[0], f[1], f[2]);
         };
     auto uv = [&](int idx) {
-        float* f = &vertices[idx * 14] + 6;
+        float* f = &vertices[idx * VERTEX_STRIDE] + UV_OFFSET;
         return glm::vec2(f[0], f[1]);
         };
     auto norm = [&](int idx) {
-        float* f = &vertices[idx * 14] + 3;
+        float* f = &vertices[idx * VERTEX_STRIDE] + NORMAL_OFFSET;
         return glm::vec3(f[0], f[1], f[2]);
         };
 
@@ -244,7 +253,7 @@ void Terrain::computeTangents() {
         T = glm::normalize(T - Nrm * glm::dot(Nrm, T));
         glm::vec3 B = glm::normalize(glm::cross(Nrm, T));
 
-        float* f = &vertices[i * 14] + 8;
+        float* f = &vertices[i * VERTEX_STRIDE] + TANGENT_OFFSET;
         f[0] = T.x; f[1] = T.y; f[2] = T.z;
         f[3] = B.x; f[4] = B.y; f[5] = B.z;
     }
@@ -259,22 +268,25 @@ void Terrain::setupMesh() {
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned),
         indices.data(), GL_STATIC_DRAW);
 
-    GLsizei stride = 14 * sizeof(float);
+    GLsizei stride = VERTEX_STRIDE * sizeof(float);
     // aPos
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0);
     // aNormal
     glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float)));
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)(NORMAL_OFFSET * sizeof(float)));
     // aTexCoord
     glEnableVertexAttribArray(2);
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*)(6 * sizeof(float)));
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*)(UV_OFFSET * sizeof(float)));
     // aTangent
     glEnableVertexAttribArray(3);
-    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, stride, (void*)(8 * sizeof(float)));
+    glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, stride, (void*)(TANGENT_OFFSET * sizeof(float)));
     // aBitangent
     glEnableVertexAttribArray(4);
-    glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, stride, (void*)(11 * sizeof(float)));
+    glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, stride, (void*)((TANGENT_OFFSET + 3) * sizeof(float)));
+    // aErosionDelta
+    glEnableVertexAttribArray(5);
+    glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, stride, (void*)(EROSION_OFFSET * sizeof(float)));
 
     glBindVertexArray(0);
 }
@@ -284,10 +296,90 @@ void Terrain::draw(const Shader& shader) const {
     glDrawElements(GL_TRIANGLES, (GLsizei)indexCount, GL_UNSIGNED_INT, 0);
     glBindVertexArray(0);
 }
+void Terrain::clearErosionHeatmap() {
+    const int N = GRID_SIZE;
+    for (int i = 0; i < N * N; ++i) {
+        vertices[i * VERTEX_STRIDE + EROSION_OFFSET] = 0.0f;
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(float), vertices.data());
+}
 void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
     const int N = GRID_SIZE;
     auto hRef = [&](int x, int z) -> float& {
-        return vertices[(z * N + x) * 14 + 1];  // y компонента
+        return vertices[(z * N + x) * VERTEX_STRIDE + POSITION_OFFSET + 1];
+        };
+    auto erosionRef = [&](int x, int z) -> float& {
+        return vertices[(z * N + x) * VERTEX_STRIDE + EROSION_OFFSET];
+        };
+    auto random01 = []() -> float {
+        return static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+        };
+
+    struct HeightGradient {
+        float height;
+        float gradX;
+        float gradZ;
+    };
+
+    auto sampleHeightGradient = [&](float x, float z) -> HeightGradient {
+        x = std::max(0.0f, std::min(static_cast<float>(N - 1) - 0.001f, x));
+        z = std::max(0.0f, std::min(static_cast<float>(N - 1) - 0.001f, z));
+
+        int x0 = static_cast<int>(std::floor(x));
+        int z0 = static_cast<int>(std::floor(z));
+        x0 = std::max(0, std::min(N - 2, x0));
+        z0 = std::max(0, std::min(N - 2, z0));
+        int x1 = x0 + 1;
+        int z1 = z0 + 1;
+
+        float tx = x - static_cast<float>(x0);
+        float tz = z - static_cast<float>(z0);
+
+        float h00 = hRef(x0, z0);
+        float h10 = hRef(x1, z0);
+        float h01 = hRef(x0, z1);
+        float h11 = hRef(x1, z1);
+
+        HeightGradient result;
+        result.height = h00 * (1.0f - tx) * (1.0f - tz)
+            + h10 * tx * (1.0f - tz)
+            + h01 * (1.0f - tx) * tz
+            + h11 * tx * tz;
+        result.gradX = (h10 - h00) * (1.0f - tz) + (h11 - h01) * tz;
+        result.gradZ = (h01 - h00) * (1.0f - tx) + (h11 - h10) * tx;
+        return result;
+        };
+
+    auto applyHeightDelta = [&](float x, float z, float delta) {
+        x = std::max(0.0f, std::min(static_cast<float>(N - 1) - 0.001f, x));
+        z = std::max(0.0f, std::min(static_cast<float>(N - 1) - 0.001f, z));
+
+        int x0 = static_cast<int>(std::floor(x));
+        int z0 = static_cast<int>(std::floor(z));
+        x0 = std::max(0, std::min(N - 2, x0));
+        z0 = std::max(0, std::min(N - 2, z0));
+        int x1 = x0 + 1;
+        int z1 = z0 + 1;
+
+        float tx = x - static_cast<float>(x0);
+        float tz = z - static_cast<float>(z0);
+        float w00 = (1.0f - tx) * (1.0f - tz);
+        float w10 = tx * (1.0f - tz);
+        float w01 = (1.0f - tx) * tz;
+        float w11 = tx * tz;
+
+        auto applyVertex = [&](int vx, int vz, float weight) {
+            float weightedDelta = delta * weight;
+            hRef(vx, vz) = std::max(0.0f, hRef(vx, vz) + weightedDelta);
+            erosionRef(vx, vz) += weightedDelta;
+            };
+
+        applyVertex(x0, z0, w00);
+        applyVertex(x1, z0, w10);
+        applyVertex(x0, z1, w01);
+        applyVertex(x1, z1, w11);
         };
 
     const int maxSteps = std::max(1, settings.maxSteps);
@@ -296,54 +388,112 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
     const float capacityScale = std::max(0.0f, settings.capacityScale);
     const float depositionRate = std::max(0.0f, std::min(1.0f, settings.depositionRate));
     const float erosionRate = std::max(0.0f, std::min(1.0f, settings.erosionRate));
+    const float inertia = std::max(0.0f, std::min(0.99f, settings.inertia));
+    const int thermalIterations = std::max(0, settings.thermalIterations);
+    const float thermalTalus = std::max(0.0f, settings.thermalTalus);
+    const float thermalStrength = std::max(0.0f, std::min(1.0f, settings.thermalStrength));
     const float minWater = std::max(0.0f, settings.minWater);
 
     for (int iter = 0; iter < iterations; ++iter) {
-        int cx = rand() % N;
-        int cz = rand() % N;
+        float posX = random01() * static_cast<float>(N - 1);
+        float posZ = random01() * static_cast<float>(N - 1);
+        float dirX = 0.0f;
+        float dirZ = 0.0f;
         float sediment = 0.0f;
         float water = initialWater;
 
         for (int step = 0; step < maxSteps; ++step) {
-            float& h = hRef(cx, cz);
+            HeightGradient current = sampleHeightGradient(posX, posZ);
 
-            // найти самого низкого соседа
-            int lx = cx, lz = cz;
-            float lh = h;
-            for (int dz = -1; dz <= 1; ++dz) {
-                for (int dx = -1; dx <= 1; ++dx) {
-                    if (!dx && !dz) continue;
-                    int nx = cx + dx, nz = cz + dz;
-                    if (nx < 0 || nx >= N || nz < 0 || nz >= N) continue;
-                    float nh = hRef(nx, nz);
-                    if (nh < lh) { lh = nh; lx = nx; lz = nz; }
-                }
+            dirX = dirX * inertia - current.gradX * (1.0f - inertia);
+            dirZ = dirZ * inertia - current.gradZ * (1.0f - inertia);
+            float dirLength = std::sqrt(dirX * dirX + dirZ * dirZ);
+            if (dirLength < 0.0001f) {
+                applyHeightDelta(posX, posZ, sediment);
+                break;
+            }
+            dirX /= dirLength;
+            dirZ /= dirLength;
+
+            float nextX = posX + dirX;
+            float nextZ = posZ + dirZ;
+            if (nextX < 0.0f || nextX >= static_cast<float>(N - 1)
+                || nextZ < 0.0f || nextZ >= static_cast<float>(N - 1)) {
+                applyHeightDelta(posX, posZ, sediment);
+                break;
             }
 
-            float dh = h - lh;
-            if (dh <= 0.0f) { h += sediment; break; }
+            HeightGradient next = sampleHeightGradient(nextX, nextZ);
+            float heightDelta = next.height - current.height;
+            float capacity = std::max(-heightDelta * capacityScale * water, 0.0f);
 
-            float cap = dh * capacityScale * water;
-
-            if (sediment > cap) {
-                float dep = (sediment - cap) * depositionRate;
-                sediment -= dep;
-                h += dep;
+            if (heightDelta > 0.0f || sediment > capacity) {
+                float depositAmount = heightDelta > 0.0f
+                    ? std::min(sediment, heightDelta)
+                    : (sediment - capacity) * depositionRate;
+                sediment -= depositAmount;
+                applyHeightDelta(posX, posZ, depositAmount);
             }
             else {
-                float er = std::min((cap - sediment) * erosionRate, h);
-                sediment += er;
-                h -= er;
+                float erodeAmount = std::min((capacity - sediment) * erosionRate, current.height);
+                sediment += erodeAmount;
+                applyHeightDelta(posX, posZ, -erodeAmount);
             }
 
-            cx = lx; cz = lz;
+            posX = nextX;
+            posZ = nextZ;
             water *= 1.0f - evaporation;
-            if (water < minWater) { hRef(cx, cz) += sediment; break; }
+            if (water < minWater) {
+                applyHeightDelta(posX, posZ, sediment);
+                break;
+            }
         }
     }
 
+
+    std::vector<float> heightDeltas(N * N, 0.0f);
+    const int neighborOffsets[8][2] = {
+        {-1, -1}, {0, -1}, {1, -1},
+        {-1,  0},          {1,  0},
+        {-1,  1}, {0,  1}, {1,  1}
+    };
+
+    for (int pass = 0; pass < thermalIterations; ++pass) {
+        std::fill(heightDeltas.begin(), heightDeltas.end(), 0.0f);
+
+        for (int z = 1; z < N - 1; ++z) {
+            for (int x = 1; x < N - 1; ++x) {
+                float centerHeight = hRef(x, z);
+                for (const auto& offset : neighborOffsets) {
+                    int nx = x + offset[0];
+                    int nz = z + offset[1];
+                    float diff = centerHeight - hRef(nx, nz);
+                    if (diff <= thermalTalus) {
+                        continue;
+                    }
+
+                    float transfer = (diff - thermalTalus) * thermalStrength * 0.125f;
+                    int centerIndex = z * N + x;
+                    int neighborIndex = nz * N + nx;
+                    heightDeltas[centerIndex] -= transfer;
+                    heightDeltas[neighborIndex] += transfer;
+                }
+            }
+        }
+
+        for (int z = 0; z < N; ++z) {
+            for (int x = 0; x < N; ++x) {
+                float delta = heightDeltas[z * N + x];
+                if (delta == 0.0f) {
+                    continue;
+                }
+                hRef(x, z) = std::max(0.0f, hRef(x, z) + delta);
+                erosionRef(x, z) += delta;
+            }
+        }
+    }
     computeNormals();
-    computeTangents(); // см. пункт 2
+    computeTangents();
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(float), vertices.data());
 }
