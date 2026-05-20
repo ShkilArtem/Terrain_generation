@@ -1,9 +1,6 @@
 #include <iostream>
 #include <cstdlib>
 #include <ctime>
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
-
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include "Camera.h"
@@ -99,71 +96,6 @@ int main() {
     terrain.generate(terrainAmplitude, terrainFrequency, terrainOctaves, terrainOffset,
         terrainPersistence, terrainLacunarity, terrainHeightPower);
 
-    // текстуры
-    auto loadTex = [&](const char* path) -> GLuint {
-        int w, h, n;
-        unsigned char* data = stbi_load(path, &w, &h, &n, 0);
-        if (!data) {
-            std::cerr << "Failed to load texture at: " << path << "\n";
-            return 0;
-        }
-
-        GLenum internalFormat, format;
-        if (n == 1) {
-            internalFormat = GL_R8;
-            format = GL_RED;
-            // важно для 1-байтовых строк:
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        }
-        else if (n == 3) {
-            internalFormat = GL_RGB8;
-            format = GL_RGB;
-        }
-        else if (n == 4) {
-            internalFormat = GL_RGBA8;
-            format = GL_RGBA;
-        }
-        else {
-            // неожиданный формат
-            stbi_image_free(data);
-            std::cerr << "Unsupported channels: " << n << " in " << path << "\n";
-            return 0;
-        }
-
-        GLuint tex;
-        glGenTextures(1, &tex);
-        glBindTexture(GL_TEXTURE_2D, tex);
-        glTexImage2D(GL_TEXTURE_2D, 0, internalFormat,
-            w, h, 0, format, GL_UNSIGNED_BYTE, data);
-        glGenerateMipmap(GL_TEXTURE_2D);
-
-        // ваши привычные параметры
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-        stbi_image_free(data);
-        return tex;
-        };
-
-
-    //Grass
-    GLuint grassAlbedoTex = loadTex("textures/Grass004_1K_JPG_Color.jpg");
-    GLuint grassNormalTex = loadTex("textures/Grass004_1K_JPG_NormalGL.jpg");
-    GLuint grassRoughnessTex = loadTex("textures/Grass004_1K_JPG_Roughness.jpg");
-    GLuint grassAOTex = loadTex("textures/Grass004_1K_JPG_AmbientOcclusion.jpg");
-    //Rock
-    GLuint rockAlbedoTex = loadTex("textures/Rock011_1K-JPG_Color.jpg");
-    GLuint rockNormalTex = loadTex("textures/Rock011_1K-JPG_NormalGL.jpg");
-    GLuint rockRoughnessTex = loadTex("textures/Rock011_1K-JPG_Roughness.jpg");
-    GLuint rockAOTex = loadTex("textures/Rock011_1K-JPG_AmbientOcclusion.jpg");
-    //Snow
-    GLuint snowAlbedoTex = loadTex("textures/Snow004_1K-JPG_Color.jpg");
-    GLuint snowNormalTex = loadTex("textures/Snow004_1K-JPG_NormalGL.jpg");
-    GLuint snowRoughnessTex = loadTex("textures/Snow004_1K-JPG_Roughness.jpg");
-
-
     // shadow map setup omitted for brevity...
     // lightSpaceMatrix, FBO и depthTexture надо создать здесь
 
@@ -178,6 +110,9 @@ int main() {
     float grassToRockEnd = 12.0f;
     float rockToSnowStart = 18.0f;
     float rockToSnowEnd = 20.0f;
+    glm::vec3 grassColor(0.30f, 0.58f, 0.24f);
+    glm::vec3 rockColor(0.48f, 0.45f, 0.40f);
+    glm::vec3 snowColor(0.92f, 0.94f, 0.90f);
 
     bool erosionRunning = false;
     int erosionIterationsPerFrame = 350;
@@ -282,6 +217,9 @@ int main() {
                 ImGui::SliderFloat("Grass to rock end", &grassToRockEnd, -20.0f, 100.0f);
                 ImGui::SliderFloat("Rock to snow start", &rockToSnowStart, -20.0f, 150.0f);
                 ImGui::SliderFloat("Rock to snow end", &rockToSnowEnd, -20.0f, 150.0f);
+                ImGui::ColorEdit3("Grass color", (float*)&grassColor);
+                ImGui::ColorEdit3("Rock color", (float*)&rockColor);
+                ImGui::ColorEdit3("Snow color", (float*)&snowColor);
             }
 
             if (ImGui::CollapsingHeader("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -315,7 +253,7 @@ int main() {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         terrainShader.use();
-        // задаём uniform'ы: model, view, proj, lightSpaceMatrix, sun, viewPos и текстурные блоки
+        // задаём uniform'ы: model, view, projection, sun, colors
         glm::mat4 model = glm::mat4(1.0f);
         glm::mat4 view = camera.GetViewMatrix();
         glm::mat4 proj = glm::perspective(glm::radians(camera.Zoom),
@@ -329,9 +267,6 @@ int main() {
         // позиция камеры в шейдер
         terrainShader.setVec3("viewPos", camera.Position);
 
-
-
-
         // параметры направленного света (Солнце)
         terrainShader.setVec3("lightDir", sunDir);
         terrainShader.setVec3("lightColor", sunColor * diffuseIntensity);
@@ -341,38 +276,9 @@ int main() {
         terrainShader.setFloat("grassToRockEnd", grassToRockEnd);
         terrainShader.setFloat("rockToSnowStart", rockToSnowStart);
         terrainShader.setFloat("rockToSnowEnd", rockToSnowEnd);
-
-        // текстуры
-        
-        // Grass
-        terrainShader.setInt("grassAlbedo", 0);
-        terrainShader.setInt("grassNormal", 1);
-        terrainShader.setInt("grassRoughness", 2);
-        terrainShader.setInt("grassAO", 3);
-        glActiveTexture(GL_TEXTURE0);  glBindTexture(GL_TEXTURE_2D, grassAlbedoTex);
-        glActiveTexture(GL_TEXTURE1);  glBindTexture(GL_TEXTURE_2D, grassNormalTex);
-        glActiveTexture(GL_TEXTURE2);  glBindTexture(GL_TEXTURE_2D, grassRoughnessTex);
-        glActiveTexture(GL_TEXTURE3);  glBindTexture(GL_TEXTURE_2D, grassAOTex);
-
-        // Rock
-        terrainShader.setInt("rockAlbedo", 4);
-        terrainShader.setInt("rockNormal", 5);
-        terrainShader.setInt("rockRoughness", 6);
-        terrainShader.setInt("rockAO", 7);
-        glActiveTexture(GL_TEXTURE4);  glBindTexture(GL_TEXTURE_2D, rockAlbedoTex);
-        glActiveTexture(GL_TEXTURE5);  glBindTexture(GL_TEXTURE_2D, rockNormalTex);
-        glActiveTexture(GL_TEXTURE6);  glBindTexture(GL_TEXTURE_2D, rockRoughnessTex);
-        glActiveTexture(GL_TEXTURE7);  glBindTexture(GL_TEXTURE_2D, rockAOTex);
-
-        // Snow
-        terrainShader.setInt("snowAlbedo", 8);
-        terrainShader.setInt("snowNormal", 9);
-        terrainShader.setInt("snowRoughness", 10);
-        glActiveTexture(GL_TEXTURE8);  glBindTexture(GL_TEXTURE_2D, snowAlbedoTex);
-        glActiveTexture(GL_TEXTURE9);  glBindTexture(GL_TEXTURE_2D, snowNormalTex);
-        glActiveTexture(GL_TEXTURE10); glBindTexture(GL_TEXTURE_2D, snowRoughnessTex);
-        
-
+        terrainShader.setVec3("grassColor", grassColor);
+        terrainShader.setVec3("rockColor", rockColor);
+        terrainShader.setVec3("snowColor", snowColor);
 
         terrain.draw(terrainShader);
 
