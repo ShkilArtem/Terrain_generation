@@ -5,15 +5,31 @@
 
 class Shader; // вперЄд объ€вление
 
+// Standalone Perlin noise implementation used by terrain generation.
+namespace TerrainNoise {
+    float perlinNoise(float x, float z);
+}
+
 class Terrain {
 public:
+    struct ErosionSettings {
+        int maxSteps = 80;
+        float initialWater = 1.0f;
+        float evaporation = 0.05f;
+        float capacityScale = 0.35f;
+        float depositionRate = 0.18f;
+        float erosionRate = 0.10f;
+        float minWater = 0.01f;
+    };
+
     Terrain(int gridSize, float worldSize);
     ~Terrain();
 
     // ѕараметры: амплитуда шума, частота, октавы, смещение
-    void generate(float amplitude, float frequency, int octaves, float offset);
+    void generate(float amplitude, float frequency, int octaves, float offset,
+        float persistence, float lacunarity, float heightPower);
     void draw(const Shader& shader) const;
-    void simulateErosion(int iterations);
+    void simulateErosion(int iterations, const ErosionSettings& settings);
 private:
     int   GRID_SIZE;
     float WORLD_SIZE;

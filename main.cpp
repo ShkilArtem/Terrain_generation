@@ -1,4 +1,6 @@
 #include <iostream>
+#include <cstdlib>
+#include <ctime>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -46,7 +48,7 @@ void mouse_callback(GLFWwindow* /*wnd*/, double xpos, double ypos) {
 
 int main() {
 
-    srand(time(NULL));
+    srand(static_cast<unsigned>(time(nullptr)));
     // GLFW
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -87,7 +89,15 @@ int main() {
 
     // террейн
     Terrain terrain(128, 64.0f);
-    terrain.generate(50.0f, 0.04f, 4, 0.0f);
+    float terrainAmplitude = 42.0f;
+    float terrainFrequency = 0.035f;
+    int terrainOctaves = 6;
+    float terrainOffset = 0.0f;
+    float terrainPersistence = 0.50f;
+    float terrainLacunarity = 2.0f;
+    float terrainHeightPower = 1.75f;
+    terrain.generate(terrainAmplitude, terrainFrequency, terrainOctaves, terrainOffset,
+        terrainPersistence, terrainLacunarity, terrainHeightPower);
 
     // текстуры
     auto loadTex = [&](const char* path) -> GLuint {
@@ -162,8 +172,16 @@ int main() {
     float ambientIntensity = 0.23f;
     float diffuseIntensity = 4.4f;
     float specularIntensity = 0.4f;
+    glm::vec3 sunColor(1.00f, 0.98f, 0.60f);
+
+    float grassToRockStart = 8.0f;
+    float grassToRockEnd = 12.0f;
+    float rockToSnowStart = 18.0f;
+    float rockToSnowEnd = 20.0f;
 
     bool erosionRunning = false;
+    int erosionIterationsPerFrame = 350;
+    Terrain::ErosionSettings erosionSettings;
 
     float el = glm::radians(sunElevationDeg);
     float az = glm::radians(sunAzimuthDeg);
@@ -212,52 +230,82 @@ int main() {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
         {
-            static float amp = 50, freq = 0.04f, ofs = 0; 
-            static int oct = 4;
-            static float sunAzimuth = 0.0f;   // в градусах 0Ц360
-            static float sunElevation = 15.0f;  // угол возвышени€ 0Ц90
-            static float ambientInt = ambientIntensity;
-            static float diffuseInt = diffuseIntensity;
-            static float specularInt = specularIntensity;
-            static int iterations = 1000;
+            ImGui::Begin("Terrain Controls");
 
-            ImGui::Begin("Terrain");
-
-            if (ImGui::SliderFloat("Amplitude", &amp, 0, 100)) terrain.generate(amp, freq, oct, ofs);
-            if (ImGui::SliderFloat("Frequency", &freq, 0, 0.1f)) terrain.generate(amp, freq, oct, ofs);
-            if (ImGui::SliderInt("Octaves", &oct, 1, 8))     terrain.generate(amp, freq, oct, ofs);
-            if (ImGui::SliderFloat("Offset", &ofs, -1000, 1000)) terrain.generate(amp, freq, oct, ofs);
-            if (ImGui::SliderFloat("Sun Azimuth", &sunAzimuth, 0.0f, 360.0f)); 
-            if (ImGui::SliderFloat("Sun Elevation", &sunElevation, 0.0f, 360.0f));
-            if (ImGui::SliderFloat("Ambient", &ambientInt, 0.0f, 5.0f));
-            if (ImGui::SliderFloat("Diffuse", &diffuseInt, 0.0f, 20.0f));
-            if (ImGui::SliderFloat("Specular", &specularInt, 0.0f, 2.0f));
-
-            if (ImGui::Button(erosionRunning ? "Stop Erosion" : "Start Erosion")) {
-                // Toggle the erosion simulation on/off
-                erosionRunning = !erosionRunning;
+            if (ImGui::CollapsingHeader("Terrain Shape", ImGuiTreeNodeFlags_DefaultOpen)) {
+                bool terrainChanged = false;
+                terrainChanged |= ImGui::SliderFloat("Amplitude", &terrainAmplitude, 0.0f, 300.0f);
+                terrainChanged |= ImGui::SliderFloat("Frequency", &terrainFrequency, 0.001f, 0.1f, "%.4f");
+                terrainChanged |= ImGui::SliderInt("Octaves", &terrainOctaves, 1, 10);
+                terrainChanged |= ImGui::SliderFloat("Persistence", &terrainPersistence, 0.10f, 0.90f);
+                terrainChanged |= ImGui::SliderFloat("Lacunarity", &terrainLacunarity, 1.10f, 4.00f);
+                terrainChanged |= ImGui::SliderFloat("Height power", &terrainHeightPower, 0.50f, 4.00f);
+                terrainChanged |= ImGui::SliderFloat("Offset", &terrainOffset, -1000.0f, 1000.0f);
+                if (ImGui::Button("Recommended terrain")) {
+                    terrainAmplitude = 42.0f;
+                    terrainFrequency = 0.035f;
+                    terrainOctaves = 6;
+                    terrainPersistence = 0.50f;
+                    terrainLacunarity = 2.0f;
+                    terrainHeightPower = 1.75f;
+                    terrainOffset = 0.0f;
+                    terrainChanged = true;
+                }
+                if (terrainChanged) {
+                    terrain.generate(terrainAmplitude, terrainFrequency, terrainOctaves, terrainOffset,
+                        terrainPersistence, terrainLacunarity, terrainHeightPower);
+                }
             }
-            if (ImGui::SliderInt("Iterations", &iterations, 10, 3000));
+
+            if (ImGui::CollapsingHeader("Erosion Simulation", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Checkbox("Run Erosion", &erosionRunning);
+                ImGui::SameLine();
+                if (ImGui::Button("Step Once")) {
+                    terrain.simulateErosion(erosionIterationsPerFrame, erosionSettings);
+                }
+                ImGui::SliderInt("Drops / frame", &erosionIterationsPerFrame, 1, 3000);
+                ImGui::SliderInt("Max droplet steps", &erosionSettings.maxSteps, 1, 300);
+                ImGui::SliderFloat("Initial water", &erosionSettings.initialWater, 0.01f, 5.0f);
+                ImGui::SliderFloat("Evaporation", &erosionSettings.evaporation, 0.0f, 0.99f);
+                ImGui::SliderFloat("Capacity scale", &erosionSettings.capacityScale, 0.0f, 2.0f);
+                ImGui::SliderFloat("Deposition rate", &erosionSettings.depositionRate, 0.0f, 1.0f);
+                ImGui::SliderFloat("Erosion rate", &erosionSettings.erosionRate, 0.0f, 1.0f);
+                ImGui::SliderFloat("Min water", &erosionSettings.minWater, 0.0f, 0.5f);
+                if (ImGui::Button("Recommended erosion")) {
+                    erosionIterationsPerFrame = 350;
+                    erosionSettings = Terrain::ErosionSettings();
+                }
+            }
+
+            if (ImGui::CollapsingHeader("Material Heights", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::SliderFloat("Grass to rock start", &grassToRockStart, -20.0f, 100.0f);
+                ImGui::SliderFloat("Grass to rock end", &grassToRockEnd, -20.0f, 100.0f);
+                ImGui::SliderFloat("Rock to snow start", &rockToSnowStart, -20.0f, 150.0f);
+                ImGui::SliderFloat("Rock to snow end", &rockToSnowEnd, -20.0f, 150.0f);
+            }
+
+            if (ImGui::CollapsingHeader("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::SliderFloat("Sun Azimuth", &sunAzimuthDeg, 0.0f, 360.0f);
+                ImGui::SliderFloat("Sun Elevation", &sunElevationDeg, 0.0f, 90.0f);
+                ImGui::ColorEdit3("Sun Color", (float*)&sunColor);
+                ImGui::SliderFloat("Ambient", &ambientIntensity, 0.0f, 5.0f);
+                ImGui::SliderFloat("Diffuse", &diffuseIntensity, 0.0f, 20.0f);
+                ImGui::SliderFloat("Specular", &specularIntensity, 0.0f, 2.0f);
+            }
 
             ImGui::End();
-            {
-                // сохран€ем новые значени€
-                ambientIntensity = ambientInt;
-                diffuseIntensity = diffuseInt;
-                specularIntensity = specularInt;
 
-                // пересчЄт направлени€ солнца
-                float el = glm::radians(sunElevation);
-                float az = glm::radians(sunAzimuth);
-                glm::vec3 L = glm::normalize(glm::vec3(
-                    cos(el) * cos(az),
-                    sin(el),
-                    cos(el) * sin(az)
-                ));
-                sunDir = L;
-            }
+            float el = glm::radians(sunElevationDeg);
+            float az = glm::radians(sunAzimuthDeg);
+            glm::vec3 L = glm::normalize(glm::vec3(
+                cos(el) * cos(az),
+                sin(el),
+                cos(el) * sin(az)
+            ));
+            sunDir = L;
+
             if (erosionRunning) {
-                terrain.simulateErosion(iterations);
+                terrain.simulateErosion(erosionIterationsPerFrame, erosionSettings);
             }
         }
 
@@ -283,17 +331,16 @@ int main() {
 
 
 
-        // ¬водим один вектор Ђцвета солнцаї:
-        static glm::vec3 sunColor(1.00f, 0.98f, 0.60f);
-        ImGui::ColorEdit3("Sun Color", (float*)&sunColor);
-
-
 
         // параметры направленного света (—олнце)
         terrainShader.setVec3("lightDir", sunDir);
         terrainShader.setVec3("lightColor", sunColor * diffuseIntensity);
         terrainShader.setFloat("ambientFactor", ambientIntensity);
         terrainShader.setFloat("specularFactor", specularIntensity);
+        terrainShader.setFloat("grassToRockStart", grassToRockStart);
+        terrainShader.setFloat("grassToRockEnd", grassToRockEnd);
+        terrainShader.setFloat("rockToSnowStart", rockToSnowStart);
+        terrainShader.setFloat("rockToSnowEnd", rockToSnowEnd);
 
         // текстуры
         

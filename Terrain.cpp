@@ -1,9 +1,94 @@
 #include "Terrain.h"
 #include "Shader.h"
-#include <glm/gtc/noise.hpp>
+#include <algorithm>
+#include <cmath>
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
 
+namespace {
+    const int PERLIN_PERMUTATION[256] = {
+        151, 160, 137, 91, 90, 15, 131, 13, 201, 95, 96, 53, 194, 233, 7, 225,
+        140, 36, 103, 30, 69, 142, 8, 99, 37, 240, 21, 10, 23, 190, 6, 148,
+        247, 120, 234, 75, 0, 26, 197, 62, 94, 252, 219, 203, 117, 35, 11, 32,
+        57, 177, 33, 88, 237, 149, 56, 87, 174, 20, 125, 136, 171, 168, 68, 175,
+        74, 165, 71, 134, 139, 48, 27, 166, 77, 146, 158, 231, 83, 111, 229, 122,
+        60, 211, 133, 230, 220, 105, 92, 41, 55, 46, 245, 40, 244, 102, 143, 54,
+        65, 25, 63, 161, 1, 216, 80, 73, 209, 76, 132, 187, 208, 89, 18, 169,
+        200, 196, 135, 130, 116, 188, 159, 86, 164, 100, 109, 198, 173, 186, 3, 64,
+        52, 217, 226, 250, 124, 123, 5, 202, 38, 147, 118, 126, 255, 82, 85, 212,
+        207, 206, 59, 227, 47, 16, 58, 17, 182, 189, 28, 42, 223, 183, 170, 213,
+        119, 248, 152, 2, 44, 154, 163, 70, 221, 153, 101, 155, 167, 43, 172, 9,
+        129, 22, 39, 253, 19, 98, 108, 110, 79, 113, 224, 232, 178, 185, 112, 104,
+        218, 246, 97, 228, 251, 34, 242, 193, 238, 210, 144, 12, 191, 179, 162, 241,
+        81, 51, 145, 235, 249, 14, 239, 107, 49, 192, 214, 31, 181, 199, 106, 157,
+        184, 84, 204, 176, 115, 121, 50, 45, 127, 4, 150, 254, 138, 236, 205, 93,
+        222, 114, 67, 29, 24, 72, 243, 141, 128, 195, 78, 66, 215, 61, 156, 180
+    };
+
+    int permutation(int index) {
+        return PERLIN_PERMUTATION[index & 255];
+    }
+
+    float fade(float t) {
+        return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+    }
+
+    float lerp(float a, float b, float t) {
+        return a + t * (b - a);
+    }
+
+    float gradientDot(int hash, float x, float z) {
+        switch (hash & 7) {
+        case 0: return  x + z;
+        case 1: return -x + z;
+        case 2: return  x - z;
+        case 3: return -x - z;
+        case 4: return  x;
+        case 5: return -x;
+        case 6: return  z;
+        default: return -z;
+        }
+    }
+}
+
+float TerrainNoise::perlinNoise(float x, float z) {
+    // 1. Find the integer lattice cell that contains the point.
+    float xFloor = std::floor(x);
+    float zFloor = std::floor(z);
+
+    int x0 = static_cast<int>(xFloor);
+    int z0 = static_cast<int>(zFloor);
+    int x1 = x0 + 1;
+    int z1 = z0 + 1;
+
+    // 2. Convert the point to local cell coordinates in [0, 1].
+    float localX = x - xFloor;
+    float localZ = z - zFloor;
+    float u = fade(localX);
+    float v = fade(localZ);
+
+    // 3. Hash each corner to choose a deterministic gradient.
+    int bottomLeft = permutation(permutation(x0) + z0);
+    int bottomRight = permutation(permutation(x1) + z0);
+    int topLeft = permutation(permutation(x0) + z1);
+    int topRight = permutation(permutation(x1) + z1);
+
+    // 4. Dot gradients with corner offsets, then smooth-interpolate them.
+    float bottom = lerp(
+        gradientDot(bottomLeft, localX, localZ),
+        gradientDot(bottomRight, localX - 1.0f, localZ),
+        u
+    );
+    float top = lerp(
+        gradientDot(topLeft, localX, localZ - 1.0f),
+        gradientDot(topRight, localX - 1.0f, localZ - 1.0f),
+        u
+    );
+
+    // 5. Normalize approximately to the [-1, 1] range expected by terrain octaves.
+    float value = lerp(bottom, top, v) * 0.70710678f;
+    return std::max(-1.0f, std::min(1.0f, value));
+}
 
 Terrain::Terrain(int gridSize, float worldSize)
     : GRID_SIZE(gridSize), WORLD_SIZE(worldSize)
@@ -19,8 +104,12 @@ Terrain::~Terrain() {
     glDeleteBuffers(1, &EBO);
 }
 
-void Terrain::generate(float amplitude, float frequency, int octaves, float offset) {
+void Terrain::generate(float amplitude, float frequency, int octaves, float offset,
+    float persistence, float lacunarity, float heightPower) {
     int N = GRID_SIZE;
+    const float safePersistence = std::max(0.0f, std::min(0.95f, persistence));
+    const float safeLacunarity = std::max(1.01f, lacunarity);
+    const float safeHeightPower = std::max(0.10f, heightPower);
     vertices.clear();
     vertices.reserve(N * N * 14);
 
@@ -32,16 +121,23 @@ void Terrain::generate(float amplitude, float frequency, int octaves, float offs
             float xPos = (u - 0.5f) * WORLD_SIZE;
             float zPos = (v - 0.5f) * WORLD_SIZE;
 
-            // Perlin noise
-            float n = 0, freq = frequency, amp = 1, maxA = 0;
+            // Multi-octave Perlin noise (fBm): big forms first, small details later.
+            float n = 0.0f;
+            float octaveFrequency = frequency;
+            float octaveAmplitude = 1.0f;
+            float amplitudeSum = 0.0f;
             for (int o = 0; o < octaves; ++o) {
-                n += glm::perlin(glm::vec2(xPos * freq + offset, zPos * freq + offset)) * amp;
-                maxA += amp;
-                freq *= 2;
-                amp *= 0.5f;
+                n += TerrainNoise::perlinNoise(
+                    xPos * octaveFrequency + offset,
+                    zPos * octaveFrequency + offset
+                ) * octaveAmplitude;
+                amplitudeSum += octaveAmplitude;
+                octaveFrequency *= safeLacunarity;
+                octaveAmplitude *= safePersistence;
             }
-            n = (n / maxA)* 0.5f + 0.5f;
-            n = pow(n, 2.0f);
+            n = (n / amplitudeSum) * 0.5f + 0.5f;
+            n = std::max(0.0f, std::min(1.0f, n));
+            n = pow(n, safeHeightPower);
             float yPos = n * amplitude;
 
             // push: pos
@@ -188,19 +284,27 @@ void Terrain::draw(const Shader& shader) const {
     glDrawElements(GL_TRIANGLES, (GLsizei)indexCount, GL_UNSIGNED_INT, 0);
     glBindVertexArray(0);
 }
-void Terrain::simulateErosion(int iterations) {
+void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
     const int N = GRID_SIZE;
     auto hRef = [&](int x, int z) -> float& {
         return vertices[(z * N + x) * 14 + 1];  // y компонента
         };
 
+    const int maxSteps = std::max(1, settings.maxSteps);
+    const float initialWater = std::max(0.001f, settings.initialWater);
+    const float evaporation = std::max(0.0f, std::min(0.99f, settings.evaporation));
+    const float capacityScale = std::max(0.0f, settings.capacityScale);
+    const float depositionRate = std::max(0.0f, std::min(1.0f, settings.depositionRate));
+    const float erosionRate = std::max(0.0f, std::min(1.0f, settings.erosionRate));
+    const float minWater = std::max(0.0f, settings.minWater);
+
     for (int iter = 0; iter < iterations; ++iter) {
         int cx = rand() % N;
         int cz = rand() % N;
         float sediment = 0.0f;
-        float water = 1.0f;
+        float water = initialWater;
 
-        for (int step = 0; step < 100; ++step) {
+        for (int step = 0; step < maxSteps; ++step) {
             float& h = hRef(cx, cz);
 
             // найти самого низкого соседа
@@ -219,22 +323,22 @@ void Terrain::simulateErosion(int iterations) {
             float dh = h - lh;
             if (dh <= 0.0f) { h += sediment; break; }
 
-            float cap = dh * 0.1f * water;   // можно вынести в параметры ImGui
+            float cap = dh * capacityScale * water;
 
             if (sediment > cap) {
-                float dep = (sediment - cap) * 0.5f;
+                float dep = (sediment - cap) * depositionRate;
                 sediment -= dep;
                 h += dep;
             }
             else {
-                float er = std::min((cap - sediment) * 0.2f, h);
+                float er = std::min((cap - sediment) * erosionRate, h);
                 sediment += er;
                 h -= er;
             }
 
             cx = lx; cz = lz;
-            water *= 0.9f;
-            if (water < 0.01f) { hRef(cx, cz) += sediment; break; }
+            water *= 1.0f - evaporation;
+            if (water < minWater) { hRef(cx, cz) += sediment; break; }
         }
     }
 

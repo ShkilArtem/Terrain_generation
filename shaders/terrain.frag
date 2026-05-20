@@ -21,7 +21,6 @@ uniform sampler2D rockAO;
 uniform sampler2D snowAlbedo;
 uniform sampler2D snowNormal;
 uniform sampler2D snowRoughness;
-uniform sampler2D snowAO;
 
 // Light + camera
 uniform vec3 lightDir;      // нормализованный
@@ -29,6 +28,11 @@ uniform vec3 lightColor;    // интенсивность
 uniform float ambientFactor;
 uniform float specularFactor;
 uniform vec3 viewPos;
+
+uniform float grassToRockStart;
+uniform float grassToRockEnd;
+uniform float rockToSnowStart;
+uniform float rockToSnowEnd;
 
 const float PI = 3.14159265359;
 
@@ -77,16 +81,17 @@ void main() {
     float h = fs_in.FragPos.y;
 
     // задаём зоны перехода
-    float g2r_min = 8.0;
-    float g2r_max = 12.0;
-    float r2s_min = 18.0;
-    float r2s_max = 20.0;
+    float g2r_min = grassToRockStart;
+    float g2r_max = max(grassToRockEnd, grassToRockStart + 0.01);
+    float r2s_min = rockToSnowStart;
+    float r2s_max = max(rockToSnowEnd, rockToSnowStart + 0.01);
 
     // вычисляем веса
-    float wGrass = 1.0 - smoothstep(g2r_min, g2r_max, h);
-    float wSnow  = smoothstep(r2s_min, r2s_max, h);
-    float wRock  = 1.0 - wGrass - wSnow;
-    wRock = clamp(wRock, 0.0, 1.0);
+    float rockBlend = smoothstep(g2r_min, g2r_max, h);
+    float snowBlend = smoothstep(r2s_min, r2s_max, h);
+    float wSnow  = snowBlend;
+    float wGrass = (1.0 - rockBlend) * (1.0 - wSnow);
+    float wRock  = rockBlend * (1.0 - wSnow);
 
     // ----------------- sample -----------------
     // Grass
@@ -104,7 +109,7 @@ void main() {
     // Snow
     vec3 albS = texture(snowAlbedo,    fs_in.TexCoord).rgb;
     float rouS = texture(snowRoughness, fs_in.TexCoord).r;
-    float aoS  = texture(snowAO,        fs_in.TexCoord).r;
+    float aoS  = 1.0;
     vec3 nrmS  = normalize(fs_in.TBN * (texture(snowNormal, fs_in.TexCoord).xyz*2.0-1.0));
 
     // смешиваем параметры
