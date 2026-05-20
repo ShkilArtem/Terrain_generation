@@ -88,7 +88,7 @@ int main() {
     Shader terrainShader("shaders/terrain.vert", "shaders/terrain.frag");
 
     // עוננוים
-    Terrain terrain(128, 128.0f);
+    Terrain terrain(128, 64.0f);
     float terrainAmplitude = 42.0f;
     float terrainFrequency = 0.035f;
     int terrainOctaves = 6;

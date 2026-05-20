@@ -6,6 +6,7 @@ in VS_OUT {
     vec2 TexCoord;
     mat3 TBN;
     float ErosionDelta;
+    float Hardness;
 } fs_in;
 
 // Grass
@@ -89,12 +90,17 @@ void main() {
     float r2s_min = rockToSnowStart;
     float r2s_max = max(rockToSnowEnd, rockToSnowStart + 0.01);
 
-    // вычисляем веса
+    // Material weights combine height bands with lithology hardness.
+    float hardness = clamp(fs_in.Hardness, 0.0, 1.0);
+    float hardRockBias = smoothstep(0.55, 0.80, hardness);
+    float softSoilBias = 1.0 - smoothstep(0.30, 0.50, hardness);
     float rockBlend = smoothstep(g2r_min, g2r_max, h);
     float snowBlend = smoothstep(r2s_min, r2s_max, h);
+    float materialRock = max(rockBlend, hardRockBias);
+    materialRock = mix(materialRock, rockBlend * 0.35, softSoilBias * (1.0 - rockBlend));
     float wSnow  = snowBlend;
-    float wGrass = (1.0 - rockBlend) * (1.0 - wSnow);
-    float wRock  = rockBlend * (1.0 - wSnow);
+    float wGrass = (1.0 - materialRock) * (1.0 - wSnow);
+    float wRock  = materialRock * (1.0 - wSnow);
 
     // ----------------- sample -----------------
     // Grass

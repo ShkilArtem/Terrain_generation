@@ -41,7 +41,7 @@ private:
     GLuint VAO, VBO, EBO;
     size_t indexCount;
 
-    // x,y,z | nx,ny,nz | uv | tangent | bitangent | erosionDelta => 15 floats
+    // x,y,z | nx,ny,nz | uv | tangent | bitangent | erosionDelta | hardness => 16 floats
     std::vector<float> vertices;
     std::vector<unsigned int> indices;
 

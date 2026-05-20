@@ -6,12 +6,13 @@
 #include <iostream>
 
 namespace {
-    const int VERTEX_STRIDE = 15;
+    const int VERTEX_STRIDE = 16;
     const int POSITION_OFFSET = 0;
     const int NORMAL_OFFSET = 3;
     const int UV_OFFSET = 6;
     const int TANGENT_OFFSET = 8;
     const int EROSION_OFFSET = 14;
+    const int HARDNESS_OFFSET = 15;
 
     const int PERLIN_PERMUTATION[256] = {
         151, 160, 137, 91, 90, 15, 131, 13, 201, 95, 96, 53, 194, 233, 7, 225,
@@ -147,6 +148,18 @@ void Terrain::generate(float amplitude, float frequency, int octaves, float offs
             n = pow(n, safeHeightPower);
             float yPos = n * amplitude;
 
+            float hardnessBase = TerrainNoise::perlinNoise(
+                xPos * frequency * 0.55f + offset + 83.17f,
+                zPos * frequency * 0.55f - offset - 41.73f
+            ) * 0.5f + 0.5f;
+            float hardnessDetail = TerrainNoise::perlinNoise(
+                xPos * frequency * 2.30f - offset + 19.31f,
+                zPos * frequency * 2.30f + offset + 57.91f
+            ) * 0.5f + 0.5f;
+            float hardness = std::max(0.0f, std::min(1.0f,
+                hardnessBase * 0.75f + hardnessDetail * 0.25f
+            ));
+
             // push: pos
             vertices.insert(vertices.end(), { xPos, yPos, zPos });
             // normal placeholder
@@ -159,6 +172,8 @@ void Terrain::generate(float amplitude, float frequency, int octaves, float offs
             vertices.insert(vertices.end(), { 0.0f, 0.0f, 0.0f });
             // signed erosion heat value: negative=eroded, positive=deposited
             vertices.push_back(0.0f);
+            // lithology hardness: soft soil=0, hard rock=1
+            vertices.push_back(hardness);
         }
     }
 
@@ -287,6 +302,9 @@ void Terrain::setupMesh() {
     // aErosionDelta
     glEnableVertexAttribArray(5);
     glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, stride, (void*)(EROSION_OFFSET * sizeof(float)));
+    // aHardness
+    glEnableVertexAttribArray(6);
+    glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, stride, (void*)(HARDNESS_OFFSET * sizeof(float)));
 
     glBindVertexArray(0);
 }
@@ -312,6 +330,9 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
         };
     auto erosionRef = [&](int x, int z) -> float& {
         return vertices[(z * N + x) * VERTEX_STRIDE + EROSION_OFFSET];
+        };
+    auto hardnessRef = [&](int x, int z) -> float {
+        return vertices[(z * N + x) * VERTEX_STRIDE + HARDNESS_OFFSET];
         };
     auto random01 = []() -> float {
         return static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
@@ -350,6 +371,30 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
         result.gradX = (h10 - h00) * (1.0f - tz) + (h11 - h01) * tz;
         result.gradZ = (h01 - h00) * (1.0f - tx) + (h11 - h10) * tx;
         return result;
+        };
+
+    auto sampleHardness = [&](float x, float z) -> float {
+        x = std::max(0.0f, std::min(static_cast<float>(N - 1) - 0.001f, x));
+        z = std::max(0.0f, std::min(static_cast<float>(N - 1) - 0.001f, z));
+
+        int x0 = static_cast<int>(std::floor(x));
+        int z0 = static_cast<int>(std::floor(z));
+        x0 = std::max(0, std::min(N - 2, x0));
+        z0 = std::max(0, std::min(N - 2, z0));
+        int x1 = x0 + 1;
+        int z1 = z0 + 1;
+
+        float tx = x - static_cast<float>(x0);
+        float tz = z - static_cast<float>(z0);
+        float h00 = hardnessRef(x0, z0);
+        float h10 = hardnessRef(x1, z0);
+        float h01 = hardnessRef(x0, z1);
+        float h11 = hardnessRef(x1, z1);
+
+        return h00 * (1.0f - tx) * (1.0f - tz)
+            + h10 * tx * (1.0f - tz)
+            + h01 * (1.0f - tx) * tz
+            + h11 * tx * tz;
         };
 
     auto applyHeightDelta = [&](float x, float z, float delta) {
@@ -435,7 +480,9 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
                 applyHeightDelta(posX, posZ, depositAmount);
             }
             else {
-                float erodeAmount = std::min((capacity - sediment) * erosionRate, current.height);
+                float localHardness = sampleHardness(posX, posZ);
+                float erosionMultiplier = std::max(0.08f, 1.0f - localHardness * 0.92f);
+                float erodeAmount = std::min((capacity - sediment) * erosionRate * erosionMultiplier, current.height);
                 sediment += erodeAmount;
                 applyHeightDelta(posX, posZ, -erodeAmount);
             }
@@ -472,7 +519,9 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
                         continue;
                     }
 
-                    float transfer = (diff - thermalTalus) * thermalStrength * 0.125f;
+                    float centerHardness = hardnessRef(x, z);
+                    float thermalMultiplier = std::max(0.10f, 1.0f - centerHardness * 0.90f);
+                    float transfer = (diff - thermalTalus) * thermalStrength * 0.125f * thermalMultiplier;
                     int centerIndex = z * N + x;
                     int neighborIndex = nz * N + nx;
                     heightDeltas[centerIndex] -= transfer;
