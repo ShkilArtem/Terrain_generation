@@ -1,5 +1,6 @@
 #pragma once
 #include <vector>
+#include <string>
 #include <glm/glm.hpp>
 #include <glad/glad.h>
 
@@ -35,11 +36,18 @@ public:
     void draw(const Shader& shader) const;
     void simulateErosion(int iterations, const ErosionSettings& settings);
     void clearErosionHeatmap();
+    void exportMetricsToCSV(const std::string& filename, int iterations,
+        float timeGenMs, float timeErosionMs, float timeThermalMs,
+        float experimentalValue, const std::string& experimentalParameter) const;
+    float getLastHydraulicTimeMs() const { return lastHydraulicTimeMs; }
+    float getLastThermalTimeMs() const { return lastThermalTimeMs; }
 private:
     int   GRID_SIZE;
     float WORLD_SIZE;
     GLuint VAO, VBO, EBO;
     size_t indexCount;
+    float lastHydraulicTimeMs = 0.0f;
+    float lastThermalTimeMs = 0.0f;
 
     // x,y,z | nx,ny,nz | uv | tangent | bitangent | erosionDelta | hardness => 16 floats
     std::vector<float> vertices;

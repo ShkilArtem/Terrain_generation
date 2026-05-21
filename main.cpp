@@ -1,6 +1,10 @@
 #include <iostream>
+#include <algorithm>
 #include <cstdlib>
 #include <ctime>
+#include <chrono>
+#include <cmath>
+#include <direct.h>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -182,6 +186,33 @@ int main() {
     bool erosionRunning = false;
     int erosionIterationsPerFrame = 350;
     Terrain::ErosionSettings erosionSettings;
+    float lastBenchmarkGenMs = 0.0f;
+    float lastBenchmarkErosionMs = 0.0f;
+    float lastBenchmarkThermalMs = 0.0f;
+    bool benchmarkExported = false;
+
+    const char* sweepParameterNames[] = {
+        "Evaporation Rate",
+        "Initial Water Volume",
+        "Inertia",
+        "Capacity Scale",
+        "Iteration Count"
+    };
+    int sweepTargetParameter = 0;
+    float sweepStartValue = 0.0f;
+    float sweepEndValue = 1.0f;
+    int sweepNumberOfSteps = 5;
+    int sweepIterations = 350;
+    int sweepGridSize = 128;
+    Terrain::ErosionSettings sweepBaselineSettings;
+    bool sweepRunning = false;
+    int sweepCurrentStep = 0;
+    float sweepLastExperimentalValue = 0.0f;
+    float sweepLastGenMs = 0.0f;
+    float sweepLastHydraulicMs = 0.0f;
+    float sweepLastThermalMs = 0.0f;
+    bool sweepCompleted = false;
+
     bool showErosionHeatmap = false;
     float heatmapScale = 12.0f;
 
@@ -281,6 +312,26 @@ int main() {
                     erosionIterationsPerFrame = 350;
                     erosionSettings = Terrain::ErosionSettings();
                 }
+                if (ImGui::Button("Run Benchmark & Export CSV")) {
+                    auto genStart = std::chrono::high_resolution_clock::now();
+                    terrain.generate(terrainAmplitude, terrainFrequency, terrainOctaves, terrainOffset,
+                        terrainPersistence, terrainLacunarity, terrainHeightPower);
+                    auto genEnd = std::chrono::high_resolution_clock::now();
+                    lastBenchmarkGenMs = std::chrono::duration<float, std::milli>(genEnd - genStart).count();
+
+                    terrain.simulateErosion(erosionIterationsPerFrame, erosionSettings);
+                    lastBenchmarkErosionMs = terrain.getLastHydraulicTimeMs();
+                    lastBenchmarkThermalMs = terrain.getLastThermalTimeMs();
+                    _mkdir("benchmark_results");
+                    terrain.exportMetricsToCSV("benchmark_results/terrain_metrics_v2.csv", erosionIterationsPerFrame,
+                        lastBenchmarkGenMs, lastBenchmarkErosionMs, lastBenchmarkThermalMs, 0.0f, "Baseline");
+                    benchmarkExported = true;
+                }
+                if (benchmarkExported) {
+                    ImGui::Text("CSV: benchmark_results/terrain_metrics_v2.csv");
+                    ImGui::Text("Gen %.2f ms | Hydraulic %.2f ms | Thermal %.2f ms",
+                        lastBenchmarkGenMs, lastBenchmarkErosionMs, lastBenchmarkThermalMs);
+                }
             }
 
             if (ImGui::CollapsingHeader("Visualization", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -300,13 +351,105 @@ int main() {
 
             if (ImGui::CollapsingHeader("Lighting", ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::SliderFloat("Sun Azimuth", &sunAzimuthDeg, 0.0f, 360.0f);
-                ImGui::SliderFloat("Sun Elevation", &sunElevationDeg, 0.0f, 90.0f);
+                ImGui::SliderFloat("Sun Elevation", &sunElevationDeg, 0.0f, 360.0f);
                 ImGui::ColorEdit3("Sun Color", (float*)&sunColor);
                 ImGui::SliderFloat("Ambient", &ambientIntensity, 0.0f, 5.0f);
                 ImGui::SliderFloat("Diffuse", &diffuseIntensity, 0.0f, 20.0f);
                 ImGui::SliderFloat("Specular", &specularIntensity, 0.0f, 2.0f);
             }
 
+            ImGui::End();
+
+            ImGui::Begin("Geological Analysis & Parameter Sweep");
+            ImGui::Combo("Target Parameter", &sweepTargetParameter, sweepParameterNames, IM_ARRAYSIZE(sweepParameterNames));
+            if (sweepTargetParameter == 4) {
+                ImGui::SliderFloat("Start Value", &sweepStartValue, 1.0f, 1000000.0f, "%.0f");
+                ImGui::SliderFloat("End Value", &sweepEndValue, 1.0f, 1000000.0f, "%.0f");
+            }
+            else {
+                ImGui::SliderFloat("Start Value", &sweepStartValue, 0.0f, 5.0f);
+                ImGui::SliderFloat("End Value", &sweepEndValue, 0.0f, 5.0f);
+            }
+            ImGui::SliderInt("Number of Steps", &sweepNumberOfSteps, 3, 10);
+            ImGui::Separator();
+            ImGui::SliderInt("Iterations per step", &sweepIterations, 1, 1000000);
+            ImGui::SliderInt("Fixed grid size", &sweepGridSize, 32, 1024);
+            ImGui::SliderInt("Baseline max droplet steps", &sweepBaselineSettings.maxSteps, 1, 300);
+            ImGui::SliderFloat("Baseline initial water", &sweepBaselineSettings.initialWater, 0.01f, 5.0f);
+            ImGui::SliderFloat("Baseline evaporation", &sweepBaselineSettings.evaporation, 0.0f, 0.99f);
+            ImGui::SliderFloat("Baseline inertia", &sweepBaselineSettings.inertia, 0.0f, 0.99f);
+            ImGui::SliderFloat("Baseline capacity scale", &sweepBaselineSettings.capacityScale, 0.0f, 2.0f);
+            ImGui::SliderFloat("Baseline deposition rate", &sweepBaselineSettings.depositionRate, 0.0f, 1.0f);
+            ImGui::SliderFloat("Baseline erosion rate", &sweepBaselineSettings.erosionRate, 0.0f, 1.0f);
+            ImGui::SliderInt("Thermal passes", &sweepBaselineSettings.thermalIterations, 0, 20);
+            ImGui::SliderFloat("Thermal talus", &sweepBaselineSettings.thermalTalus, 0.0f, 1.0f);
+            ImGui::SliderFloat("Thermal strength", &sweepBaselineSettings.thermalStrength, 0.0f, 1.0f);
+            ImGui::SliderFloat("Baseline min water", &sweepBaselineSettings.minWater, 0.0f, 0.5f);
+
+            if (!sweepRunning && ImGui::Button("Execute Automated Parameter Sweep")) {
+                _mkdir("benchmark_results");
+                sweepRunning = true;
+                sweepCompleted = false;
+                sweepCurrentStep = 0;
+            }
+
+            if (sweepRunning) {
+                int totalSteps = std::max(3, sweepNumberOfSteps);
+                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f),
+                    "Running Sweep Simulation Step %d/%d...", sweepCurrentStep + 1, totalSteps);
+
+                float stepSize = (totalSteps > 1)
+                    ? (sweepEndValue - sweepStartValue) / static_cast<float>(totalSteps - 1)
+                    : 0.0f;
+                sweepLastExperimentalValue = sweepStartValue + static_cast<float>(sweepCurrentStep) * stepSize;
+
+                const int activeGridSize = sweepGridSize;
+                int activeIterations = sweepIterations;
+                if (sweepTargetParameter == 4) {
+                    activeIterations = std::max(1, static_cast<int>(std::round(sweepLastExperimentalValue)));
+                    sweepLastExperimentalValue = static_cast<float>(activeIterations);
+                }
+
+                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f),
+                    "Step %d / %d (Value: %.4f, Fixed Grid: %d)",
+                    sweepCurrentStep + 1, totalSteps, sweepLastExperimentalValue, activeGridSize);
+                glfwPollEvents();
+                glFlush();
+                Terrain sweepTerrain(activeGridSize, 64.0f);
+                auto sweepGenStart = std::chrono::high_resolution_clock::now();
+                sweepTerrain.generate(terrainAmplitude, terrainFrequency, terrainOctaves, terrainOffset,
+                    terrainPersistence, terrainLacunarity, terrainHeightPower);
+                sweepTerrain.clearErosionHeatmap();
+                auto sweepGenEnd = std::chrono::high_resolution_clock::now();
+                sweepLastGenMs = std::chrono::duration<float, std::milli>(sweepGenEnd - sweepGenStart).count();
+
+                Terrain::ErosionSettings testSettings = sweepBaselineSettings;
+                if (sweepTargetParameter == 0) testSettings.evaporation = sweepLastExperimentalValue;
+                if (sweepTargetParameter == 1) testSettings.initialWater = sweepLastExperimentalValue;
+                if (sweepTargetParameter == 2) testSettings.inertia = sweepLastExperimentalValue;
+                if (sweepTargetParameter == 3) testSettings.capacityScale = sweepLastExperimentalValue;
+
+                sweepTerrain.simulateErosion(activeIterations, testSettings);
+                glfwPollEvents();
+                glFlush();
+                sweepLastHydraulicMs = sweepTerrain.getLastHydraulicTimeMs();
+                sweepLastThermalMs = sweepTerrain.getLastThermalTimeMs();
+                sweepTerrain.exportMetricsToCSV("benchmark_results/parameter_sweep_report_v2.csv", activeIterations,
+                    sweepLastGenMs, sweepLastHydraulicMs, sweepLastThermalMs, sweepLastExperimentalValue,
+                    sweepParameterNames[sweepTargetParameter]);
+
+                sweepCurrentStep++;
+                if (sweepCurrentStep >= totalSteps) {
+                    sweepRunning = false;
+                    sweepCompleted = true;
+                }
+            }
+
+            if (sweepCompleted) {
+                ImGui::Text("Sweep CSV: benchmark_results/parameter_sweep_report_v2.csv");
+            }
+            ImGui::Text("Last value %.4f | Gen %.2f ms | Hydraulic %.2f ms | Thermal %.2f ms",
+                sweepLastExperimentalValue, sweepLastGenMs, sweepLastHydraulicMs, sweepLastThermalMs);
             ImGui::End();
 
             float el = glm::radians(sunElevationDeg);
