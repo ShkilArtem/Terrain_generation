@@ -28,7 +28,8 @@ except ModuleNotFoundError:
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-BENCHMARK_DIR = PROJECT_ROOT / "benchmark_results"
+ANALYSIS_DIR = Path(r"D:\School bullshits\TIPE\Terrain analysis")
+BENCHMARK_DIR = ANALYSIS_DIR
 DEFAULT_CSV_PATH = BENCHMARK_DIR / "terrain_metrics_v2.csv"
 
 
@@ -152,10 +153,12 @@ def add_scatter_chart(ws, title, x_ref, y_ref, anchor, x_title, y_title,
 def main():
     csv_path = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_CSV_PATH
     if not csv_path.is_absolute():
-        csv_path = PROJECT_ROOT / csv_path
+        project_relative = PROJECT_ROOT / csv_path
+        analysis_relative = ANALYSIS_DIR / csv_path.name
+        csv_path = project_relative if project_relative.exists() else analysis_relative
     if not csv_path.exists():
         available_csvs = sorted(BENCHMARK_DIR.glob("*.csv")) if BENCHMARK_DIR.exists() else []
-        available_text = "\n".join(f"  - {path.relative_to(PROJECT_ROOT)}" for path in available_csvs)
+        available_text = "\n".join(f"  - {path}" for path in available_csvs)
         if not available_text:
             available_text = "  (no CSV files found)"
         raise FileNotFoundError(
@@ -164,7 +167,8 @@ def main():
             "  1. Open the ImGui window: Geological Analysis & Parameter Sweep\n"
             "  2. Click: Execute Automated Parameter Sweep\n"
             "  3. Then rerun this command.\n\n"
-            "Available CSV files in benchmark_results:\n"
+            f"Expected analysis folder: {ANALYSIS_DIR}\n\n"
+            "Available CSV files in the analysis folder:\n"
             f"{available_text}"
         )
 
@@ -183,10 +187,17 @@ def main():
         row.setdefault("ExperimentalValue", row.get("Iterations"))
         row.setdefault("ExperimentalParameter", "Benchmark")
         row.setdefault("MemoryEstimate_MB", estimate_memory_mb(row.get("GridSize") or 0))
+        row.setdefault("AveragePathLength", 0)
+        for b in range(90):
+            row.setdefault(f"InitialBin{b}", row.get(f"Bin{b}", 0))
+        for h in range(101):
+            row.setdefault(f"InitialHypsoAbove{h}", row.get(f"HypsoAbove{h}", 0))
 
     headers = list(rows[0].keys())
     bin_headers = [f"Bin{i}" for i in range(90)]
+    initial_bin_headers = [f"InitialBin{i}" for i in range(90)]
     hypso_headers = [f"HypsoAbove{i}" for i in range(101)]
+    initial_hypso_headers = [f"InitialHypsoAbove{i}" for i in range(101)]
     derived_headers = [
         "Run",
         "IncludeInCharts",
@@ -204,11 +215,15 @@ def main():
         "ThermalTime_pct",
         "MemoryEstimate_MB",
         "TotalVolumeMoved",
+        "AveragePathLength",
         "MeanSlope_deg",
         "P95Slope_deg",
         "HypsometricAUC",
+        "InitialMeanSlope_deg",
+        "InitialP95Slope_deg",
+        "InitialHypsometricAUC",
     ]
-    derived_rows = [derive_row(row, bin_headers, hypso_headers) for row in rows]
+    derived_rows = [derive_row(row, bin_headers, hypso_headers, initial_bin_headers, initial_hypso_headers) for row in rows]
     active_derived_rows = [row for row in derived_rows if row.get("IncludeInCharts", 1) != 0] or derived_rows
     latest_derived = active_derived_rows[-1]
     latest_run = latest_derived.get("Run")
@@ -223,6 +238,7 @@ def main():
     ws_manager = wb.create_sheet("Run Manager")
     ws_grid = wb.create_sheet("Cost Grid Size")
     ws_iter = wb.create_sheet("Cost Iterations")
+    ws_evaporation = wb.create_sheet("Evaporation Analysis")
     ws_profile = wb.create_sheet("Profiling")
     ws_realism = wb.create_sheet("Realism Metrics")
     ws_tradeoff = wb.create_sheet("Tradeoff Elbow")
@@ -237,12 +253,13 @@ def main():
     append_table(ws_derived, derived_headers, [[row.get(header) for header in derived_headers] for row in derived_rows])
     ws_derived.freeze_panes = "A2"
 
-    write_run_selector_sheet(ws_selector, rows, derived_rows, headers, derived_headers, bin_headers, hypso_headers)
+    write_run_selector_sheet(ws_selector, rows, derived_rows, headers, derived_headers, bin_headers, hypso_headers, initial_bin_headers, initial_hypso_headers)
     write_run_manager_sheet(ws_manager, derived_rows)
     write_cost_grid_sheet(ws_grid, active_derived_rows)
     write_cost_iterations_sheet(ws_iter, active_derived_rows)
+    write_evaporation_sheet(ws_evaporation, active_derived_rows)
     write_profiling_sheet(ws_profile, latest_derived)
-    write_realism_sheet(ws_realism, active_derived_rows, bin_headers, hypso_headers)
+    write_realism_sheet(ws_realism, rows, active_derived_rows, bin_headers, hypso_headers)
     write_tradeoff_sheet(ws_tradeoff, active_derived_rows, derived_headers)
     write_correlations_sheet(ws_corr, active_derived_rows)
 
@@ -265,8 +282,8 @@ def estimate_memory_mb(grid_size):
     return (vertex_bytes + index_bytes + working_bytes) / (1024 * 1024)
 
 
-def derive_row(row, bin_headers, hypso_headers):
-    bins = [row.get(header, 0) or 0 for header in bin_headers]
+def slope_summary(row, headers):
+    bins = [row.get(header, 0) or 0 for header in headers]
     total_bins = sum(bins) or 1
     mean_slope = sum(count * (degree + 0.5) for degree, count in enumerate(bins)) / total_bins
     cumulative = 0
@@ -276,8 +293,16 @@ def derive_row(row, bin_headers, hypso_headers):
         if cumulative / total_bins >= 0.95:
             p95_slope = degree
             break
+    return mean_slope, p95_slope
+
+
+def derive_row(row, bin_headers, hypso_headers, initial_bin_headers, initial_hypso_headers):
+    mean_slope, p95_slope = slope_summary(row, bin_headers)
+    initial_mean_slope, initial_p95_slope = slope_summary(row, initial_bin_headers)
     hypso_values = [row.get(header, 0) or 0 for header in hypso_headers]
     hypso_auc = sum(hypso_values) / len(hypso_values)
+    initial_hypso_values = [row.get(header, 0) or 0 for header in initial_hypso_headers]
+    initial_hypso_auc = sum(initial_hypso_values) / len(initial_hypso_values)
     gen = row.get("GenTime_ms") or 0
     erosion = row.get("ErosionTime_ms") or 0
     thermal = row.get("ThermalTime_ms") or 0
@@ -300,9 +325,13 @@ def derive_row(row, bin_headers, hypso_headers):
         "ThermalTime_pct": 100 * thermal / total_time if total_time else 0,
         "MemoryEstimate_MB": row.get("MemoryEstimate_MB") or estimate_memory_mb(row.get("GridSize")),
         "TotalVolumeMoved": row.get("TotalVolumeMoved"),
+        "AveragePathLength": row.get("AveragePathLength"),
         "MeanSlope_deg": mean_slope,
         "P95Slope_deg": p95_slope,
         "HypsometricAUC": hypso_auc,
+        "InitialMeanSlope_deg": initial_mean_slope,
+        "InitialP95Slope_deg": initial_p95_slope,
+        "InitialHypsometricAUC": initial_hypso_auc,
     }
 
 
@@ -310,17 +339,18 @@ def write_readme(ws):
     rows = [
         ["Sheet", "Purpose"],
         ["Raw Data", "Direct CSV import. One benchmark or sweep step equals one row."],
-        ["Derived Metrics", "Adds total runtime (ms), physics runtime (ms), stage percentages (%), mean slope (deg), P95 slope (deg), hypsometric AUC (%), and memory estimate (MB)."],
-        ["Run Selector", "Interactive single-run view. Choose a Run number in B2 to switch profiling, slope histogram, and hypsometric charts."],
+        ["Derived Metrics", "Adds total runtime (ms), physics runtime (ms), stage percentages (%), final and initial slope/hypsometric metrics, and memory estimate (MB)."],
+        ["Run Selector", "Interactive single-run view. Choose a Run number in B2 to switch profiling, time-share pie, final-vs-initial slope histogram, and final-vs-initial hypsometric charts."],
         ["Run Manager", "Interactive run filtering. Set Include in filtered charts to 0 to hide a benchmark run from the manager charts without deleting raw data."],
         ["Cost Grid Size", "Use for Coût de calcul: time (ms) and memory (MB) versus fixed GRID_SIZE (vertices per side)."],
         ["Cost Iterations", "Use for Coût de calcul: runtime (ms) versus droplet count K. Expected hydraulic erosion trend is O(K)."],
+        ["Evaporation Analysis", "Evaporation sweep charts: evaporation rate versus moved volume, hydraulic erosion time, and average droplet path length."],
         ["Profiling", "Pie chart of generation, hydraulic erosion, and thermal weathering time share (% of total run time)."],
-        ["Realism Metrics", "Selected-run realism view. Charts follow the Run Selector dropdown: slope histogram and hypsometric curve for the chosen run."],
+        ["Realism Metrics", "Selected-run realism view. Charts follow the Run Selector dropdown and compare final terrain against the initial pre-erosion terrain."],
         ["Tradeoff Elbow", "Two paired views: averaged curves across active runs, plus selected-run point charts linked to Run Selector."],
         ["Correlations", "Pearson correlation matrix between runtime, memory, volume moved, and morphology metrics."],
         [],
-        ["How to run", "1. Run benchmarks/sweeps in the app. 2. Run: python tools/generate_benchmark_excel.py benchmark_results/parameter_sweep_report_v2.csv"],
+        ["How to run", r"1. Run benchmarks/sweeps in the app. 2. Run: python tools/generate_benchmark_excel.py D:\School bullshits\TIPE\Terrain analysis\parameter_sweep_report_v2.csv"],
     ]
     for row in rows:
         ws.append(row)
@@ -339,7 +369,7 @@ def index_formula(sheet, value_col_letter, match_col_letter, match_cell):
     return f"=INDEX('{sheet}'!${value_col_letter}:${value_col_letter},MATCH({match_cell},'{sheet}'!${match_col_letter}:${match_col_letter},0))"
 
 
-def write_run_selector_sheet(ws, rows, derived_rows, raw_headers, derived_headers, bin_headers, hypso_headers):
+def write_run_selector_sheet(ws, rows, derived_rows, raw_headers, derived_headers, bin_headers, hypso_headers, initial_bin_headers, initial_hypso_headers):
     ws["A1"] = "Selected Benchmark Run"
     ws["A2"] = "Choose run:"
     ws["B2"] = derived_rows[-1].get("Run") if derived_rows else 1
@@ -370,9 +400,13 @@ def write_run_selector_sheet(ws, rows, derived_rows, raw_headers, derived_header
         ("Physics simulation time (ms)", "PhysicsTime_ms"),
         ("Total runtime incl. generation (ms)", "TotalTime_ms"),
         ("Moved volume (height units)", "TotalVolumeMoved"),
+        ("Average path length (grid cells)", "AveragePathLength"),
         ("Mean slope (deg)", "MeanSlope_deg"),
+        ("Initial mean slope (deg)", "InitialMeanSlope_deg"),
         ("P95 slope (deg)", "P95Slope_deg"),
+        ("Initial P95 slope (deg)", "InitialP95Slope_deg"),
         ("Hypsometric AUC (%)", "HypsometricAUC"),
+        ("Initial hypsometric AUC (%)", "InitialHypsometricAUC"),
     ]
     ws["A4"] = "Metric"
     ws["B4"] = "Selected run value"
@@ -396,20 +430,28 @@ def write_run_selector_sheet(ws, rows, derived_rows, raw_headers, derived_header
         ws.cell(i, 5, index_formula("Derived Metrics", derived_cols.get(time_key), derived_run_col, "$B$2"))
         ws.cell(i, 6, index_formula("Derived Metrics", derived_cols.get(pct_key), derived_run_col, "$B$2"))
 
-    ws["A20"] = "Slope angle (degrees)"
-    ws["B20"] = "Vertex count (cells)"
-    ws["D20"] = "Normalized height threshold (%)"
-    ws["E20"] = "Area above threshold (%)"
-    style_header(ws, 20)
+    ws["A24"] = "Slope angle (degrees)"
+    ws["B24"] = "After erosion vertex count (cells)"
+    ws["C24"] = "Initial vertex count (cells)"
+    ws["E24"] = "Normalized height threshold (%)"
+    ws["F24"] = "After erosion area above threshold (%)"
+    ws["G24"] = "Initial area above threshold (%)"
+    style_header(ws, 24)
 
-    for degree, header in enumerate(bin_headers, start=21):
-        ws.cell(degree, 1, degree - 21)
+    for degree, header in enumerate(bin_headers, start=25):
+        ws.cell(degree, 1, degree - 25)
         raw_col = column_letter(raw_headers, header)
         ws.cell(degree, 2, index_formula("Raw Data", raw_col, raw_run_col, "$B$2") if raw_col and raw_run_col else 0)
-    for i, header in enumerate(hypso_headers, start=21):
-        ws.cell(i, 4, i - 21)
+    for degree, header in enumerate(initial_bin_headers, start=25):
         raw_col = column_letter(raw_headers, header)
-        ws.cell(i, 5, index_formula("Raw Data", raw_col, raw_run_col, "$B$2") if raw_col and raw_run_col else 0)
+        ws.cell(degree, 3, index_formula("Raw Data", raw_col, raw_run_col, "$B$2") if raw_col and raw_run_col else ws.cell(degree, 2).value)
+    for i, header in enumerate(hypso_headers, start=25):
+        ws.cell(i, 5, i - 25)
+        raw_col = column_letter(raw_headers, header)
+        ws.cell(i, 6, index_formula("Raw Data", raw_col, raw_run_col, "$B$2") if raw_col and raw_run_col else 0)
+    for i, header in enumerate(initial_hypso_headers, start=25):
+        raw_col = column_letter(raw_headers, header)
+        ws.cell(i, 7, index_formula("Raw Data", raw_col, raw_run_col, "$B$2") if raw_col and raw_run_col else ws.cell(i, 6).value)
 
     profile_chart = BarChart()
     profile_chart.title = "Selected Run: Stage Runtime"
@@ -420,19 +462,31 @@ def write_run_selector_sheet(ws, rows, derived_rows, raw_headers, derived_header
     profile_chart.width = 16
     ws.add_chart(profile_chart, "H2")
 
+    share_chart = PieChart()
+    share_chart.title = "Selected Run: Time Share by Stage"
+    share_chart.add_data(Reference(ws, min_col=6, min_row=4, max_row=7), titles_from_data=True)
+    share_chart.set_categories(Reference(ws, min_col=4, min_row=5, max_row=7))
+    share_chart.legend.position = "r"
+    share_chart.dataLabels = DataLabelList()
+    share_chart.dataLabels.showPercent = True
+    share_chart.dataLabels.showLeaderLines = True
+    share_chart.height = 9
+    share_chart.width = 16
+    ws.add_chart(share_chart, "P2")
+
     slope_chart = BarChart()
-    slope_chart.title = "Selected Run: Slope Histogram"
-    slope_chart.add_data(Reference(ws, min_col=2, min_row=20, max_row=110), titles_from_data=True)
-    slope_chart.set_categories(Reference(ws, min_col=1, min_row=21, max_row=110))
+    slope_chart.title = "Selected Run: Slope Histogram (After vs Initial)"
+    slope_chart.add_data(Reference(ws, min_col=2, max_col=3, min_row=24, max_row=114), titles_from_data=True)
+    slope_chart.set_categories(Reference(ws, min_col=1, min_row=25, max_row=114))
     configure_chart(slope_chart, x_title="Slope angle (degrees)", y_title="Vertex count (cells)", y_format="0")
     slope_chart.height = 10
     slope_chart.width = 18
     ws.add_chart(slope_chart, "H20")
 
     hypso_chart = LineChart()
-    hypso_chart.title = "Selected Run: Hypsometric Curve"
-    hypso_chart.add_data(Reference(ws, min_col=5, min_row=20, max_row=121), titles_from_data=True)
-    hypso_chart.set_categories(Reference(ws, min_col=4, min_row=21, max_row=121))
+    hypso_chart.title = "Selected Run: Hypsometric Curve (After vs Initial)"
+    hypso_chart.add_data(Reference(ws, min_col=6, max_col=7, min_row=24, max_row=125), titles_from_data=True)
+    hypso_chart.set_categories(Reference(ws, min_col=5, min_row=25, max_row=125))
     configure_chart(
         hypso_chart,
         x_title="Normalized height threshold (%)",
@@ -612,6 +666,88 @@ def write_cost_iterations_sheet(ws, rows):
         )
 
 
+def write_evaporation_sheet(ws, rows):
+    evaporation_rows = [row for row in rows if row.get("ExperimentalParameter") == "Evaporation Rate"]
+    headers = [
+        "Evaporation rate",
+        "Average moved volume (height units)",
+        "Average hydraulic erosion time (ms)",
+        "Average path length (grid cells)",
+        "Runs averaged (count)",
+    ]
+    groups = {}
+    for row in evaporation_rows:
+        value = row.get("ExperimentalValue")
+        if value is None:
+            continue
+        groups.setdefault(value, []).append(row)
+
+    table = []
+    for value in sorted(groups):
+        group = groups[value]
+        table.append([
+            value,
+            mean([row.get("TotalVolumeMoved") for row in group]),
+            mean([row.get("ErosionTime_ms") for row in group]),
+            mean([row.get("AveragePathLength") for row in group]),
+            len(group),
+        ])
+
+    if not table:
+        ws["A1"] = "No evaporation sweep data found"
+        ws["A2"] = "Run Parameter Sweep with Target Parameter = Evaporation Rate to populate these charts."
+        style_header(ws, 1)
+        return
+
+    start, end = append_table(ws, headers, table)
+    evaporation_values = [row[0] for row in table]
+    volume_values = [row[1] for row in table]
+    erosion_values = [row[2] for row in table]
+    path_values = [row[3] for row in table]
+    add_scatter_chart(
+        ws,
+        "Evaporation Rate vs Total Volume Moved",
+        Reference(ws, min_col=1, min_row=start + 1, max_row=end),
+        Reference(ws, min_col=2, min_row=start + 1, max_row=end),
+        "F2",
+        "Evaporation rate",
+        "Average moved volume (height units)",
+        x_format="0.00",
+        y_format="0.00",
+        x_major_unit=nice_major_unit(evaporation_values),
+        y_major_unit=nice_major_unit(volume_values),
+        series_title="Average moved volume",
+    )
+    add_scatter_chart(
+        ws,
+        "Evaporation Rate vs Hydraulic Erosion Time",
+        Reference(ws, min_col=1, min_row=start + 1, max_row=end),
+        Reference(ws, min_col=3, min_row=start + 1, max_row=end),
+        "F20",
+        "Evaporation rate",
+        "Average hydraulic erosion time (ms)",
+        x_format="0.00",
+        y_format="0",
+        x_major_unit=nice_major_unit(evaporation_values),
+        y_major_unit=nice_major_unit(erosion_values),
+        series_title="Average hydraulic erosion time",
+    )
+    add_scatter_chart(
+        ws,
+        "Climate Impact: Evaporation vs Path Length",
+        Reference(ws, min_col=1, min_row=start + 1, max_row=end),
+        Reference(ws, min_col=4, min_row=start + 1, max_row=end),
+        "F38",
+        "Evaporation rate",
+        "Average path length (grid cells)",
+        x_format="0.00",
+        y_format="0.00",
+        x_major_unit=nice_major_unit(evaporation_values),
+        y_major_unit=nice_major_unit(path_values),
+        series_title="Average path length",
+    )
+
+
 def write_profiling_sheet(ws, latest):
     rows = [
         ["Stage", "Time (ms)", "Share of total time (%)"],
@@ -635,21 +771,25 @@ def write_profiling_sheet(ws, latest):
     ws.add_chart(pie, "E2")
 
 
-def write_realism_sheet(ws, derived_rows, bin_headers, hypso_headers):
+def write_realism_sheet(ws, raw_rows, derived_rows, bin_headers, hypso_headers):
     ws["A1"] = "Selected Run: Slope Histogram"
-    ws["D1"] = "Selected Run: Hypsometric Curve"
-    ws["G1"] = "Selected Run Summary"
-    ws["G2"] = "This sheet follows the Run Selector dropdown."
+    ws["E1"] = "Selected Run: Hypsometric Curve"
+    ws["I1"] = "Selected Run Summary"
+    ws["I2"] = "This sheet follows the Run Selector dropdown."
     ws["A2"] = "Slope angle (degrees)"
-    ws["B2"] = "Vertex count (cells)"
+    ws["B2"] = "After erosion vertex count (cells)"
+    ws["C2"] = "Initial vertex count (cells)"
     for degree, header in enumerate(bin_headers, start=3):
         ws.cell(degree, 1, degree - 3)
-        ws.cell(degree, 2, f"='Run Selector'!B{degree + 18}")
-    ws["D2"] = "Normalized height threshold (%)"
-    ws["E2"] = "Area above threshold (%)"
+        ws.cell(degree, 2, f"='Run Selector'!B{degree + 22}")
+        ws.cell(degree, 3, f"='Run Selector'!C{degree + 22}")
+    ws["E2"] = "Normalized height threshold (%)"
+    ws["F2"] = "After erosion area above threshold (%)"
+    ws["G2"] = "Initial area above threshold (%)"
     for i, header in enumerate(hypso_headers, start=3):
-        ws.cell(i, 4, i - 3)
-        ws.cell(i, 5, f"='Run Selector'!E{i + 18}")
+        ws.cell(i, 5, i - 3)
+        ws.cell(i, 6, f"='Run Selector'!F{i + 22}")
+        ws.cell(i, 7, f"='Run Selector'!G{i + 22}")
     summary_rows = [
         ("Selected run", "='Run Selector'!$B$2"),
         ("Experimental parameter", "='Run Selector'!$B$5"),
@@ -657,16 +797,20 @@ def write_realism_sheet(ws, derived_rows, bin_headers, hypso_headers):
         ("Grid size (vertices/side)", "='Run Selector'!$B$7"),
         ("Droplet iterations (count)", "='Run Selector'!$B$8"),
         ("Moved volume (height units)", "='Run Selector'!$B$14"),
-        ("Mean slope (deg)", "='Run Selector'!$B$15"),
-        ("P95 slope (deg)", "='Run Selector'!$B$16"),
-        ("Hypsometric AUC (%)", "='Run Selector'!$B$17"),
+        ("Average path length (grid cells)", "='Run Selector'!$B$15"),
+        ("Mean slope (deg)", "='Run Selector'!$B$16"),
+        ("Initial mean slope (deg)", "='Run Selector'!$B$17"),
+        ("P95 slope (deg)", "='Run Selector'!$B$18"),
+        ("Initial P95 slope (deg)", "='Run Selector'!$B$19"),
+        ("Hypsometric AUC (%)", "='Run Selector'!$B$20"),
+        ("Initial hypsometric AUC (%)", "='Run Selector'!$B$21"),
     ]
-    append_table(ws, ["Metric", "Selected run value"], summary_rows, start_row=3, start_col=7)
+    append_table(ws, ["Metric", "Selected run value"], summary_rows, start_row=3, start_col=9)
     for row in [1, 2]:
         style_header(ws, row)
     slope_chart = BarChart()
-    slope_chart.title = "Selected Run: Slope Histogram"
-    slope_chart.add_data(Reference(ws, min_col=2, min_row=2, max_row=92), titles_from_data=True)
+    slope_chart.title = "Selected Run: Slope Histogram (After vs Initial)"
+    slope_chart.add_data(Reference(ws, min_col=2, max_col=3, min_row=2, max_row=92), titles_from_data=True)
     slope_chart.set_categories(Reference(ws, min_col=1, min_row=3, max_row=92))
     configure_chart(
         slope_chart,
@@ -679,9 +823,9 @@ def write_realism_sheet(ws, derived_rows, bin_headers, hypso_headers):
     slope_chart.width = 18
     ws.add_chart(slope_chart, "M2")
     hypso_chart = LineChart()
-    hypso_chart.title = "Selected Run: Hypsometric Curve"
-    hypso_chart.add_data(Reference(ws, min_col=5, min_row=2, max_row=103), titles_from_data=True)
-    hypso_chart.set_categories(Reference(ws, min_col=4, min_row=3, max_row=103))
+    hypso_chart.title = "Selected Run: Hypsometric Curve (After vs Initial)"
+    hypso_chart.add_data(Reference(ws, min_col=6, max_col=7, min_row=2, max_row=103), titles_from_data=True)
+    hypso_chart.set_categories(Reference(ws, min_col=5, min_row=3, max_row=103))
     configure_chart(
         hypso_chart,
         x_title="Normalized height threshold (%)",
@@ -694,6 +838,42 @@ def write_realism_sheet(ws, derived_rows, bin_headers, hypso_headers):
     hypso_chart.height = 10
     hypso_chart.width = 18
     ws.add_chart(hypso_chart, "M20")
+
+    run_to_raw = {row.get("Run"): row for row in raw_rows}
+    comparison_start = 108
+    ws.cell(comparison_start, 1, "Normalized height threshold (%)")
+    active_runs = [row for row in derived_rows if row.get("Run") in run_to_raw]
+    for col, row in enumerate(active_runs, start=2):
+        label = row.get("ExperimentalValue")
+        ws.cell(comparison_start, col, f"Value: {label:g}" if isinstance(label, (int, float)) else f"Value: {label}")
+    style_header(ws, comparison_start)
+
+    for i, header in enumerate(hypso_headers, start=comparison_start + 1):
+        ws.cell(i, 1, i - comparison_start - 1)
+        for col, row in enumerate(active_runs, start=2):
+            raw = run_to_raw[row.get("Run")]
+            ws.cell(i, col, raw.get(header, 0) or 0)
+
+    if active_runs:
+        comparison_chart = LineChart()
+        comparison_chart.title = "Sweep Comparison: Hypsometric Curves by Experimental Value"
+        comparison_chart.add_data(
+            Reference(ws, min_col=2, max_col=1 + len(active_runs), min_row=comparison_start, max_row=comparison_start + 101),
+            titles_from_data=True,
+        )
+        comparison_chart.set_categories(Reference(ws, min_col=1, min_row=comparison_start + 1, max_row=comparison_start + 101))
+        configure_chart(
+            comparison_chart,
+            x_title="Normalized height threshold (%)",
+            y_title="Area above threshold (%)",
+            x_format="0",
+            y_format="0",
+            x_major_unit=10,
+            y_major_unit=10,
+        )
+        comparison_chart.height = 12
+        comparison_chart.width = 22
+        ws.add_chart(comparison_chart, "M38")
 
 
 def grouped_tradeoff_average(rows):
@@ -830,6 +1010,9 @@ def write_correlations_sheet(ws, rows):
         "MeanSlope_deg",
         "P95Slope_deg",
         "HypsometricAUC",
+        "InitialMeanSlope_deg",
+        "InitialP95Slope_deg",
+        "InitialHypsometricAUC",
     ]
     ws.append(["Metric", *metric_names])
     for metric_a in metric_names:

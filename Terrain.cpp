@@ -122,7 +122,9 @@ void Terrain::generate(float amplitude, float frequency, int octaves, float offs
     const float safeLacunarity = std::max(1.01f, lacunarity);
     const float safeHeightPower = std::max(0.10f, heightPower);
     vertices.clear();
+    initialHeights.clear();
     vertices.reserve(N * N * VERTEX_STRIDE);
+    initialHeights.reserve(N * N);
 
     // 1) генерим позиции, нормали-заглушки, UV, тангенты-заглушки
     for (int z = 0; z < N; ++z) {
@@ -150,6 +152,7 @@ void Terrain::generate(float amplitude, float frequency, int octaves, float offs
             n = std::max(0.0f, std::min(1.0f, n));
             n = pow(n, safeHeightPower);
             float yPos = n * amplitude;
+            initialHeights.push_back(yPos);
 
             float hardnessBase = TerrainNoise::perlinNoise(
                 xPos * frequency * 0.55f + offset + 83.17f,
@@ -326,6 +329,27 @@ void Terrain::clearErosionHeatmap() {
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(float), vertices.data());
 }
+
+void Terrain::resetToInitialTerrain() {
+    const int N = GRID_SIZE;
+    if (vertices.empty() || initialHeights.size() != static_cast<size_t>(N * N)) {
+        clearErosionHeatmap();
+        return;
+    }
+
+    for (int i = 0; i < N * N; ++i) {
+        vertices[i * VERTEX_STRIDE + POSITION_OFFSET + 1] = initialHeights[i];
+        vertices[i * VERTEX_STRIDE + EROSION_OFFSET] = 0.0f;
+    }
+
+    computeNormals();
+    computeTangents();
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(float), vertices.data());
+    lastHydraulicTimeMs = 0.0f;
+    lastThermalTimeMs = 0.0f;
+    lastAveragePathLength = 0.0f;
+}
 void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
     const int N = GRID_SIZE;
     auto hRef = [&](int x, int z) -> float& {
@@ -443,6 +467,8 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
     const float minWater = std::max(0.0f, settings.minWater);
     lastHydraulicTimeMs = 0.0f;
     lastThermalTimeMs = 0.0f;
+    lastAveragePathLength = 0.0f;
+    long long totalDropletSteps = 0;
 
     auto hydraulicStart = std::chrono::high_resolution_clock::now();
     for (int iter = 0; iter < iterations; ++iter) {
@@ -460,20 +486,23 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
             dirZ = dirZ * inertia - current.gradZ * (1.0f - inertia);
             float dirLength = std::sqrt(dirX * dirX + dirZ * dirZ);
             if (dirLength < 0.0001f) {
-                applyHeightDelta(posX, posZ, sediment);
-                break;
+                float randomAngle = random01() * 6.28318530718f;
+                dirX = std::cos(randomAngle);
+                dirZ = std::sin(randomAngle);
             }
-            dirX /= dirLength;
-            dirZ /= dirLength;
+            else {
+                dirX /= dirLength;
+                dirZ /= dirLength;
+            }
 
             float nextX = posX + dirX;
             float nextZ = posZ + dirZ;
+            totalDropletSteps++;
             if (nextX < 0.0f || nextX >= static_cast<float>(N - 1)
                 || nextZ < 0.0f || nextZ >= static_cast<float>(N - 1)) {
                 applyHeightDelta(posX, posZ, sediment);
                 break;
             }
-
             HeightGradient next = sampleHeightGradient(nextX, nextZ);
             float heightDelta = next.height - current.height;
             float capacity = std::max(-heightDelta * capacityScale * water, 0.0f);
@@ -504,6 +533,9 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
     }
     auto hydraulicEnd = std::chrono::high_resolution_clock::now();
     lastHydraulicTimeMs = std::chrono::duration<float, std::milli>(hydraulicEnd - hydraulicStart).count();
+    lastAveragePathLength = iterations > 0
+        ? static_cast<float>(totalDropletSteps) / static_cast<float>(iterations)
+        : 0.0f;
 
     auto thermalStart = std::chrono::high_resolution_clock::now();
     std::vector<float> heightDeltas(N * N, 0.0f);
@@ -559,80 +591,114 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
 }
 void Terrain::exportMetricsToCSV(const std::string& filename, int iterations,
     float timeGenMs, float timeErosionMs, float timeThermalMs,
-    float experimentalValue, const std::string& experimentalParameter) const {
+    float avgPathLength, float experimentalValue, const std::string& experimentalParameter) const {
     const int N = GRID_SIZE;
     if (N <= 2 || vertices.empty()) {
         std::cerr << "Cannot export terrain metrics: terrain is empty or too small.\n";
         return;
     }
 
-    auto heightAt = [&](int x, int z) -> float {
+    auto currentHeightAt = [&](int x, int z) -> float {
         return vertices[(z * N + x) * VERTEX_STRIDE + POSITION_OFFSET + 1];
+        };
+    auto initialHeightAt = [&](int x, int z) -> float {
+        size_t index = static_cast<size_t>(z * N + x);
+        return (initialHeights.size() == static_cast<size_t>(N * N)) ? initialHeights[index] : currentHeightAt(x, z);
         };
     auto erosionAt = [&](int x, int z) -> float {
         return vertices[(z * N + x) * VERTEX_STRIDE + EROSION_OFFSET];
         };
 
+    auto computeSlopeBins = [&](auto heightAt) {
+        std::array<int, 90> bins{};
+        const float spacing = WORLD_SIZE / static_cast<float>(std::max(1, N - 1));
+        const float radiansToDegrees = 57.2957795f;
+        for (int z = 1; z < N - 1; ++z) {
+            for (int x = 1; x < N - 1; ++x) {
+                float dhdx = (heightAt(x + 1, z) - heightAt(x - 1, z)) / (2.0f * spacing);
+                float dhdz = (heightAt(x, z + 1) - heightAt(x, z - 1)) / (2.0f * spacing);
+                float slopeAngle = std::atan(std::sqrt(dhdx * dhdx + dhdz * dhdz)) * radiansToDegrees;
+                int bin = std::max(0, std::min(89, static_cast<int>(std::floor(slopeAngle))));
+                bins[bin]++;
+            }
+        }
+        return bins;
+        };
+
+    auto computeHypsometricAbove = [&](auto heightAt) {
+        std::array<float, 101> above{};
+        float minHeight = heightAt(0, 0);
+        float maxHeight = minHeight;
+        for (int z = 0; z < N; ++z) {
+            for (int x = 0; x < N; ++x) {
+                float h = heightAt(x, z);
+                minHeight = std::min(minHeight, h);
+                maxHeight = std::max(maxHeight, h);
+            }
+        }
+
+        float heightRange = std::max(0.0001f, maxHeight - minHeight);
+        int vertexCount = N * N;
+        for (int i = 0; i <= 100; ++i) {
+            float threshold = minHeight + heightRange * (static_cast<float>(i) / 100.0f);
+            int aboveCount = 0;
+            for (int z = 0; z < N; ++z) {
+                for (int x = 0; x < N; ++x) {
+                    if (heightAt(x, z) >= threshold) {
+                        aboveCount++;
+                    }
+                }
+            }
+            above[i] = 100.0f * static_cast<float>(aboveCount) / static_cast<float>(vertexCount);
+        }
+        return above;
+        };
+
     float totalDisplacedVolume = 0.0f;
-    float minHeight = heightAt(0, 0);
-    float maxHeight = minHeight;
     for (int z = 0; z < N; ++z) {
         for (int x = 0; x < N; ++x) {
             totalDisplacedVolume += std::abs(erosionAt(x, z));
-            float h = heightAt(x, z);
-            minHeight = std::min(minHeight, h);
-            maxHeight = std::max(maxHeight, h);
         }
     }
 
-    std::array<int, 90> slopeBins{};
-    const float spacing = WORLD_SIZE / static_cast<float>(std::max(1, N - 1));
-    const float radiansToDegrees = 57.2957795f;
-    for (int z = 1; z < N - 1; ++z) {
-        for (int x = 1; x < N - 1; ++x) {
-            float dhdx = (heightAt(x + 1, z) - heightAt(x - 1, z)) / (2.0f * spacing);
-            float dhdz = (heightAt(x, z + 1) - heightAt(x, z - 1)) / (2.0f * spacing);
-            float slopeAngle = std::atan(std::sqrt(dhdx * dhdx + dhdz * dhdz)) * radiansToDegrees;
-            int bin = std::max(0, std::min(89, static_cast<int>(std::floor(slopeAngle))));
-            slopeBins[bin]++;
-        }
-    }
-
-    std::array<float, 101> hypsometricAbove{};
-    float heightRange = std::max(0.0001f, maxHeight - minHeight);
-    int vertexCount = N * N;
-    for (int i = 0; i <= 100; ++i) {
-        float threshold = minHeight + heightRange * (static_cast<float>(i) / 100.0f);
-        int aboveCount = 0;
-        for (int z = 0; z < N; ++z) {
-            for (int x = 0; x < N; ++x) {
-                if (heightAt(x, z) >= threshold) {
-                    aboveCount++;
-                }
-            }
-        }
-        hypsometricAbove[i] = 100.0f * static_cast<float>(aboveCount) / static_cast<float>(vertexCount);
-    }
+    auto slopeBins = computeSlopeBins(currentHeightAt);
+    auto initialSlopeBins = computeSlopeBins(initialHeightAt);
+    auto hypsometricAbove = computeHypsometricAbove(currentHeightAt);
+    auto initialHypsometricAbove = computeHypsometricAbove(initialHeightAt);
 
     bool writeHeader = true;
+    bool resetSchema = false;
     {
         std::ifstream existing(filename, std::ios::binary | std::ios::ate);
         writeHeader = !existing.good() || existing.tellg() == 0;
+        if (!writeHeader) {
+            existing.seekg(0, std::ios::beg);
+            std::string headerLine;
+            std::getline(existing, headerLine);
+            resetSchema = headerLine.find("AveragePathLength") == std::string::npos;
+            writeHeader = resetSchema;
+        }
     }
 
-    std::ofstream file(filename, std::ios::app);
+    std::ofstream file(filename, resetSchema ? std::ios::trunc : std::ios::app);
     if (!file) {
         std::cerr << "Cannot open metrics CSV: " << filename << "\n";
         return;
     }
 
     if (writeHeader) {
-        file << "ExperimentalValue,ExperimentalParameter,GridSize,Iterations,GenTime_ms,ErosionTime_ms,ThermalTime_ms,TotalVolumeMoved,MemoryEstimate_MB";
+        file << "ExperimentalValue,ExperimentalParameter,GridSize,Iterations,GenTime_ms,ErosionTime_ms,ThermalTime_ms,TotalVolumeMoved,AveragePathLength,MemoryEstimate_MB";
         for (int i = 0; i < 90; ++i) {
             file << ",Bin" << i;
         }
+        for (int i = 0; i < 90; ++i) {
+            file << ",InitialBin" << i;
+        }
         for (int i = 0; i <= 100; ++i) {
             file << ",HypsoAbove" << i;
+        }
+        for (int i = 0; i <= 100; ++i) {
+            file << ",InitialHypsoAbove" << i;
         }
         file << "\n";
     }
@@ -642,11 +708,17 @@ void Terrain::exportMetricsToCSV(const std::string& filename, int iterations,
         + (N * N * sizeof(float))) / (1024.0f * 1024.0f);
 
     file << experimentalValue << ',' << experimentalParameter << ',' << GRID_SIZE << ',' << iterations << ',' << timeGenMs << ',' << timeErosionMs
-        << ',' << timeThermalMs << ',' << totalDisplacedVolume << ',' << memoryEstimateMb;
+        << ',' << timeThermalMs << ',' << totalDisplacedVolume << ',' << avgPathLength << ',' << memoryEstimateMb;
     for (int value : slopeBins) {
         file << ',' << value;
     }
+    for (int value : initialSlopeBins) {
+        file << ',' << value;
+    }
     for (float value : hypsometricAbove) {
+        file << ',' << value;
+    }
+    for (float value : initialHypsometricAbove) {
         file << ',' << value;
     }
     file << "\n";

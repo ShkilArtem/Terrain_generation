@@ -30,6 +30,9 @@ float lastX = SCR_W * 0.5f;
 float lastY = SCR_H * 0.5f;
 
 Camera camera;
+const char* ANALYSIS_DIR = "D:\\School bullshits\\TIPE\\Terrain analysis";
+const char* BENCHMARK_CSV_PATH = "D:\\School bullshits\\TIPE\\Terrain analysis\\terrain_metrics_v2.csv";
+const char* SWEEP_CSV_PATH = "D:\\School bullshits\\TIPE\\Terrain analysis\\parameter_sweep_report_v2.csv";
 
 void mouse_callback(GLFWwindow* /*wnd*/, double xpos, double ypos) {
     ImGuiIO& io = ImGui::GetIO();
@@ -185,6 +188,7 @@ int main() {
 
     bool erosionRunning = false;
     int erosionIterationsPerFrame = 350;
+    long long liveErosionIterations = 0;
     Terrain::ErosionSettings erosionSettings;
     float lastBenchmarkGenMs = 0.0f;
     float lastBenchmarkErosionMs = 0.0f;
@@ -287,6 +291,7 @@ int main() {
                 if (terrainChanged) {
                     terrain.generate(terrainAmplitude, terrainFrequency, terrainOctaves, terrainOffset,
                         terrainPersistence, terrainLacunarity, terrainHeightPower);
+                    liveErosionIterations = 0;
                 }
             }
 
@@ -295,6 +300,13 @@ int main() {
                 ImGui::SameLine();
                 if (ImGui::Button("Step Once")) {
                     terrain.simulateErosion(erosionIterationsPerFrame, erosionSettings);
+                    liveErosionIterations += erosionIterationsPerFrame;
+                }
+                ImGui::Text("Live iterations since reset: %lld", liveErosionIterations);
+                if (ImGui::Button("Reset simulation state")) {
+                    erosionRunning = false;
+                    liveErosionIterations = 0;
+                    terrain.resetToInitialTerrain();
                 }
                 ImGui::SliderInt("Drops / frame", &erosionIterationsPerFrame, 1, 3000);
                 ImGui::SliderInt("Max droplet steps", &erosionSettings.maxSteps, 1, 300);
@@ -316,19 +328,21 @@ int main() {
                     auto genStart = std::chrono::high_resolution_clock::now();
                     terrain.generate(terrainAmplitude, terrainFrequency, terrainOctaves, terrainOffset,
                         terrainPersistence, terrainLacunarity, terrainHeightPower);
+                    liveErosionIterations = 0;
                     auto genEnd = std::chrono::high_resolution_clock::now();
                     lastBenchmarkGenMs = std::chrono::duration<float, std::milli>(genEnd - genStart).count();
 
                     terrain.simulateErosion(erosionIterationsPerFrame, erosionSettings);
                     lastBenchmarkErosionMs = terrain.getLastHydraulicTimeMs();
                     lastBenchmarkThermalMs = terrain.getLastThermalTimeMs();
-                    _mkdir("benchmark_results");
-                    terrain.exportMetricsToCSV("benchmark_results/terrain_metrics_v2.csv", erosionIterationsPerFrame,
-                        lastBenchmarkGenMs, lastBenchmarkErosionMs, lastBenchmarkThermalMs, 0.0f, "Baseline");
+                    _mkdir(ANALYSIS_DIR);
+                    terrain.exportMetricsToCSV(BENCHMARK_CSV_PATH, erosionIterationsPerFrame,
+                        lastBenchmarkGenMs, lastBenchmarkErosionMs, lastBenchmarkThermalMs,
+                        terrain.getLastAveragePathLength(), 0.0f, "Baseline");
                     benchmarkExported = true;
                 }
                 if (benchmarkExported) {
-                    ImGui::Text("CSV: benchmark_results/terrain_metrics_v2.csv");
+                    ImGui::Text("CSV: %s", BENCHMARK_CSV_PATH);
                     ImGui::Text("Gen %.2f ms | Hydraulic %.2f ms | Thermal %.2f ms",
                         lastBenchmarkGenMs, lastBenchmarkErosionMs, lastBenchmarkThermalMs);
                 }
@@ -362,13 +376,21 @@ int main() {
 
             ImGui::Begin("Geological Analysis & Parameter Sweep");
             ImGui::Combo("Target Parameter", &sweepTargetParameter, sweepParameterNames, IM_ARRAYSIZE(sweepParameterNames));
-            if (sweepTargetParameter == 4) {
-                ImGui::SliderFloat("Start Value", &sweepStartValue, 1.0f, 1000000.0f, "%.0f");
-                ImGui::SliderFloat("End Value", &sweepEndValue, 1.0f, 1000000.0f, "%.0f");
+            if (sweepTargetParameter == 0 || sweepTargetParameter == 2) {
+                ImGui::SliderFloat("Start Value", &sweepStartValue, 0.0f, 0.99f, "%.3f");
+                ImGui::SliderFloat("End Value", &sweepEndValue, 0.0f, 0.99f, "%.3f");
+            }
+            else if (sweepTargetParameter == 1) {
+                ImGui::SliderFloat("Start Value", &sweepStartValue, 0.01f, 5.0f, "%.3f");
+                ImGui::SliderFloat("End Value", &sweepEndValue, 0.01f, 5.0f, "%.3f");
+            }
+            else if (sweepTargetParameter == 3) {
+                ImGui::SliderFloat("Start Value", &sweepStartValue, 0.0f, 2.0f, "%.3f");
+                ImGui::SliderFloat("End Value", &sweepEndValue, 0.0f, 2.0f, "%.3f");
             }
             else {
-                ImGui::SliderFloat("Start Value", &sweepStartValue, 0.0f, 5.0f);
-                ImGui::SliderFloat("End Value", &sweepEndValue, 0.0f, 5.0f);
+                ImGui::SliderFloat("Start Value", &sweepStartValue, 1.0f, 1000000.0f, "%.0f");
+                ImGui::SliderFloat("End Value", &sweepEndValue, 1.0f, 1000000.0f, "%.0f");
             }
             ImGui::SliderInt("Number of Steps", &sweepNumberOfSteps, 3, 10);
             ImGui::Separator();
@@ -387,7 +409,7 @@ int main() {
             ImGui::SliderFloat("Baseline min water", &sweepBaselineSettings.minWater, 0.0f, 0.5f);
 
             if (!sweepRunning && ImGui::Button("Execute Automated Parameter Sweep")) {
-                _mkdir("benchmark_results");
+                _mkdir(ANALYSIS_DIR);
                 sweepRunning = true;
                 sweepCompleted = false;
                 sweepCurrentStep = 0;
@@ -402,6 +424,15 @@ int main() {
                     ? (sweepEndValue - sweepStartValue) / static_cast<float>(totalSteps - 1)
                     : 0.0f;
                 sweepLastExperimentalValue = sweepStartValue + static_cast<float>(sweepCurrentStep) * stepSize;
+                if (sweepTargetParameter == 0 || sweepTargetParameter == 2) {
+                    sweepLastExperimentalValue = std::max(0.0f, std::min(0.99f, sweepLastExperimentalValue));
+                }
+                else if (sweepTargetParameter == 1) {
+                    sweepLastExperimentalValue = std::max(0.01f, sweepLastExperimentalValue);
+                }
+                else if (sweepTargetParameter == 3) {
+                    sweepLastExperimentalValue = std::max(0.0f, std::min(2.0f, sweepLastExperimentalValue));
+                }
 
                 const int activeGridSize = sweepGridSize;
                 int activeIterations = sweepIterations;
@@ -429,13 +460,15 @@ int main() {
                 if (sweepTargetParameter == 2) testSettings.inertia = sweepLastExperimentalValue;
                 if (sweepTargetParameter == 3) testSettings.capacityScale = sweepLastExperimentalValue;
 
+                std::srand(1337);
                 sweepTerrain.simulateErosion(activeIterations, testSettings);
                 glfwPollEvents();
                 glFlush();
                 sweepLastHydraulicMs = sweepTerrain.getLastHydraulicTimeMs();
                 sweepLastThermalMs = sweepTerrain.getLastThermalTimeMs();
-                sweepTerrain.exportMetricsToCSV("benchmark_results/parameter_sweep_report_v2.csv", activeIterations,
-                    sweepLastGenMs, sweepLastHydraulicMs, sweepLastThermalMs, sweepLastExperimentalValue,
+                sweepTerrain.exportMetricsToCSV(SWEEP_CSV_PATH, activeIterations,
+                    sweepLastGenMs, sweepLastHydraulicMs, sweepLastThermalMs,
+                    sweepTerrain.getLastAveragePathLength(), sweepLastExperimentalValue,
                     sweepParameterNames[sweepTargetParameter]);
 
                 sweepCurrentStep++;
@@ -446,7 +479,7 @@ int main() {
             }
 
             if (sweepCompleted) {
-                ImGui::Text("Sweep CSV: benchmark_results/parameter_sweep_report_v2.csv");
+                ImGui::Text("Sweep CSV: %s", SWEEP_CSV_PATH);
             }
             ImGui::Text("Last value %.4f | Gen %.2f ms | Hydraulic %.2f ms | Thermal %.2f ms",
                 sweepLastExperimentalValue, sweepLastGenMs, sweepLastHydraulicMs, sweepLastThermalMs);
@@ -463,6 +496,7 @@ int main() {
 
             if (erosionRunning) {
                 terrain.simulateErosion(erosionIterationsPerFrame, erosionSettings);
+                liveErosionIterations += erosionIterationsPerFrame;
             }
         }
 
