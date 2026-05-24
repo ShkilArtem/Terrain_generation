@@ -62,3 +62,5 @@ packages/
 *.ini
 # Benchmark telemetry exports and generated Excel reports
 benchmark_results/
+outputs/
+presentation/
