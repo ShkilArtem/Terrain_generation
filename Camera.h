@@ -16,10 +16,10 @@ public:
     glm::vec3 Up;
     glm::vec3 Right;
     glm::vec3 WorldUp;
-    // углы Эйлера
+    // Euler angles controlling the camera direction.
     float Yaw;
     float Pitch;
-    // настройки
+    // Movement and lens settings.
     float MovementSpeed;
     float MouseSensitivity;
     float Zoom;

@@ -4,7 +4,7 @@
 #include <glm/glm.hpp>
 #include <glad/glad.h>
 
-class Shader; // вперЄд объ€вление
+class Shader; // Forward declaration keeps this header independent from Shader.h.
 
 // Standalone Perlin noise implementation used by terrain generation.
 namespace TerrainNoise {
@@ -30,7 +30,7 @@ public:
     Terrain(int gridSize, float worldSize);
     ~Terrain();
 
-    // ѕараметры: амплитуда шума, частота, октавы, смещение
+    // Builds a height field from layered noise and uploads the mesh to OpenGL.
     void generate(float amplitude, float frequency, int octaves, float offset,
         float persistence, float lacunarity, float heightPower);
     void draw(const Shader& shader) const;
@@ -52,7 +52,7 @@ private:
     float lastThermalTimeMs = 0.0f;
     float lastAveragePathLength = 0.0f;
 
-    // x,y,z | nx,ny,nz | uv | tangent | bitangent | erosionDelta | hardness => 16 floats
+    // Vertex layout: position | normal | uv | tangent | bitangent | erosionDelta | hardness.
     std::vector<float> vertices;
     std::vector<float> initialHeights;
     std::vector<unsigned int> indices;

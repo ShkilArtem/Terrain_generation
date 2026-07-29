@@ -1,0 +1,49 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libgl1-mesa-dev libglfw3-dev
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DTERRAIN_FETCH_GLFW=OFF
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Check Python report script
+        run: python -m py_compile tools/generate_benchmark_excel.py
+
+      - name: Install package tree
+        run: cmake --install build --config Release --prefix dist
+
+      - name: Upload application
+        uses: actions/upload-artifact@v7
+        with:
+          name: TerrainGeneration-${{ runner.os }}
+          path: dist
+          if-no-files-found: error

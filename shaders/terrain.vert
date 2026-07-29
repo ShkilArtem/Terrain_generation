@@ -25,6 +25,7 @@ void main() {
     vs_out.ErosionDelta = aErosionDelta;
     vs_out.Hardness = aHardness;
 
+    // TBN transforms sampled normal maps from tangent space into world space.
     vec3 T = normalize(mat3(model) * aTangent);
     vec3 B = normalize(mat3(model) * aBitangent);
     vec3 N = normalize(mat3(model) * aNormal);

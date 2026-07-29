@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use this software in academic work, please cite it using the metadata below."
+title: "Terrain Generation & Erosion Lab"
+type: software
+version: 1.0.0
+authors:
+  - family-names: "Shkil"
+    given-names: "Artem"
+repository-code: "https://github.com/ShkilArtem/Terrain_generation"
+license: MIT
+keywords:
+  - procedural terrain
+  - hydraulic erosion
+  - thermal erosion
+  - OpenGL
+  - geomorphology

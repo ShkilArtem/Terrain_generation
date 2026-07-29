@@ -15,17 +15,17 @@ Shader::Shader(const char* vertexPath, const char* fragmentPath) {
     const char* vCode = vertexCode.c_str();
     const char* fCode = fragmentCode.c_str();
     unsigned int vertex, fragment;
-    // компиляция вершинного
+    // Compile the vertex shader stage.
     vertex = glCreateShader(GL_VERTEX_SHADER);
     glShaderSource(vertex, 1, &vCode, NULL);
     glCompileShader(vertex);
     checkCompileErrors(vertex, "VERTEX");
-    // фрагментного
+    // Compile the fragment shader stage.
     fragment = glCreateShader(GL_FRAGMENT_SHADER);
     glShaderSource(fragment, 1, &fCode, NULL);
     glCompileShader(fragment);
     checkCompileErrors(fragment, "FRAGMENT");
-    // линковка
+    // Link both stages into a shader program.
     ID = glCreateProgram();
     glAttachShader(ID, vertex);
     glAttachShader(ID, fragment);

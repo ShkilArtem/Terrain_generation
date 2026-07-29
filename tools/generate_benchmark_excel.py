@@ -10,27 +10,17 @@ try:
     from openpyxl.worksheet.datavalidation import DataValidation
     from openpyxl.styles import Font, PatternFill
     from openpyxl.utils import get_column_letter
-except ModuleNotFoundError:
-    codex_site_packages = Path.home() / ".cache" / "codex-runtimes" / "codex-primary-runtime" / "dependencies" / "python" / "Lib" / "site-packages"
-    if codex_site_packages.exists():
-        sys.path.insert(0, str(codex_site_packages))
-        from openpyxl import Workbook
-        from openpyxl.chart import BarChart, LineChart, PieChart, Reference, ScatterChart, Series
-        from openpyxl.chart.label import DataLabelList
-        from openpyxl.worksheet.datavalidation import DataValidation
-        from openpyxl.styles import Font, PatternFill
-        from openpyxl.utils import get_column_letter
-    else:
-        raise ModuleNotFoundError(
-            "openpyxl is required to generate the Excel workbook. "
-            "Install it with: python -m pip install openpyxl"
-        )
+except ModuleNotFoundError as exc:
+    raise SystemExit(
+        "openpyxl is required to generate the Excel workbook.\n"
+        "Install the project requirements with:\n"
+        "  python -m pip install -r requirements.txt"
+    ) from exc
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-ANALYSIS_DIR = Path(r"D:\School bullshits\TIPE\Terrain analysis")
-BENCHMARK_DIR = ANALYSIS_DIR
-DEFAULT_CSV_PATH = BENCHMARK_DIR / "terrain_metrics_v2.csv"
+BENCHMARK_DIR = PROJECT_ROOT / "outputs" / "benchmark_results"
+DEFAULT_CSV_PATH = BENCHMARK_DIR / "parameter_sweep_report_v2.csv"
 
 
 def to_number(value):
@@ -153,9 +143,21 @@ def add_scatter_chart(ws, title, x_ref, y_ref, anchor, x_title, y_title,
 def main():
     csv_path = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_CSV_PATH
     if not csv_path.is_absolute():
-        project_relative = PROJECT_ROOT / csv_path
-        analysis_relative = ANALYSIS_DIR / csv_path.name
-        csv_path = project_relative if project_relative.exists() else analysis_relative
+        working_directory_path = Path.cwd() / csv_path
+        project_relative_path = PROJECT_ROOT / csv_path
+        benchmark_path = BENCHMARK_DIR / csv_path.name
+        csv_path = next(
+            (
+                path
+                for path in (
+                    working_directory_path,
+                    project_relative_path,
+                    benchmark_path,
+                )
+                if path.exists()
+            ),
+            project_relative_path,
+        )
     if not csv_path.exists():
         available_csvs = sorted(BENCHMARK_DIR.glob("*.csv")) if BENCHMARK_DIR.exists() else []
         available_text = "\n".join(f"  - {path}" for path in available_csvs)
@@ -167,13 +169,14 @@ def main():
             "  1. Open the ImGui window: Geological Analysis & Parameter Sweep\n"
             "  2. Click: Execute Automated Parameter Sweep\n"
             "  3. Then rerun this command.\n\n"
-            f"Expected analysis folder: {ANALYSIS_DIR}\n\n"
+            f"Expected analysis folder: {BENCHMARK_DIR}\n\n"
             "Available CSV files in the analysis folder:\n"
             f"{available_text}"
         )
 
-    BENCHMARK_DIR.mkdir(exist_ok=True)
-    xlsx_path = BENCHMARK_DIR / f"{csv_path.stem}_analysis.xlsx"
+    csv_path = csv_path.resolve()
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    xlsx_path = csv_path.with_name(f"{csv_path.stem}_analysis.xlsx")
 
     with csv_path.open(newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -350,7 +353,7 @@ def write_readme(ws):
         ["Tradeoff Elbow", "Two paired views: averaged curves across active runs, plus selected-run point charts linked to Run Selector."],
         ["Correlations", "Pearson correlation matrix between runtime, memory, volume moved, and morphology metrics."],
         [],
-        ["How to run", r"1. Run benchmarks/sweeps in the app. 2. Run: python tools/generate_benchmark_excel.py D:\School bullshits\TIPE\Terrain analysis\parameter_sweep_report_v2.csv"],
+        ["How to run", "1. Run benchmarks/sweeps in the app. 2. Run: python tools/generate_benchmark_excel.py outputs/benchmark_results/parameter_sweep_report_v2.csv"],
     ]
     for row in rows:
         ws.append(row)

@@ -9,24 +9,24 @@ in VS_OUT {
     float Hardness;
 } fs_in;
 
-// Grass
+// Grass material maps.
 uniform sampler2D grassAlbedo;
 uniform sampler2D grassNormal;
 uniform sampler2D grassRoughness;
 uniform sampler2D grassAO;
-// Rock
+// Rock material maps.
 uniform sampler2D rockAlbedo;
 uniform sampler2D rockNormal;
 uniform sampler2D rockRoughness;
 uniform sampler2D rockAO;
-// Snow
+// Snow material maps.
 uniform sampler2D snowAlbedo;
 uniform sampler2D snowNormal;
 uniform sampler2D snowRoughness;
 
-// Light + camera
-uniform vec3 lightDir;      // нормализованный
-uniform vec3 lightColor;    // интенсивность
+// Light and camera inputs.
+uniform vec3 lightDir;      // Normalized direction from the light source.
+uniform vec3 lightColor;    // Light color multiplied by diffuse intensity.
 uniform float ambientFactor;
 uniform float specularFactor;
 uniform vec3 viewPos;
@@ -40,13 +40,13 @@ uniform float heatmapScale;
 
 const float PI = 3.14159265359;
 
-// Schlick Fresnel приближение
+// Schlick Fresnel approximation.
 vec3 fresnelSchlick(float cosTheta, vec3 F0)
 {
     return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
 }
 
-// GGX нормальное распределение (NDF)
+// GGX normal distribution function.
 float DistributionGGX(vec3 N, vec3 H, float roughness)
 {
     float a      = roughness*roughness;
@@ -61,7 +61,7 @@ float DistributionGGX(vec3 N, vec3 H, float roughness)
     return nom / denom;
 }
 
-// Schlick-GGX аппрокс. геометрического затухания
+// Schlick-GGX geometry attenuation.
 float GeometrySchlickGGX(float NdotV, float roughness)
 {
     float r = (roughness + 1.0);
@@ -69,7 +69,7 @@ float GeometrySchlickGGX(float NdotV, float roughness)
     return NdotV / (NdotV * (1.0 - k) + k);
 }
 
-// Smith метод для Geometry
+// Smith combines view and light masking terms.
 float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness)
 {
     float NdotV = max(dot(N, V), 0.0);
@@ -81,10 +81,10 @@ float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness)
 
 void main() {
     
-    // высота в мировых координатах
+    // World-space height drives the base material bands.
     float h = fs_in.FragPos.y;
 
-    // задаём зоны перехода
+    // Clamp transition ranges so smoothstep always has a valid interval.
     float g2r_min = grassToRockStart;
     float g2r_max = max(grassToRockEnd, grassToRockStart + 0.01);
     float r2s_min = rockToSnowStart;
@@ -96,43 +96,45 @@ void main() {
     float softSoilBias = 1.0 - smoothstep(0.30, 0.50, hardness);
     float rockBlend = smoothstep(g2r_min, g2r_max, h);
     float snowBlend = smoothstep(r2s_min, r2s_max, h);
+    // Hardness can expose rock even below the pure height-based rock band.
     float materialRock = max(rockBlend, hardRockBias);
+    // Soft soil suppresses rock until the height band strongly favors it.
     materialRock = mix(materialRock, rockBlend * 0.35, softSoilBias * (1.0 - rockBlend));
     float wSnow  = snowBlend;
     float wGrass = (1.0 - materialRock) * (1.0 - wSnow);
     float wRock  = materialRock * (1.0 - wSnow);
 
-    // ----------------- sample -----------------
-    // Grass
+    // Sample material textures in tangent space.
+    // Grass.
     vec3 albG = texture(grassAlbedo,    fs_in.TexCoord).rgb;
     float rouG = texture(grassRoughness, fs_in.TexCoord).r;
     float aoG  = texture(grassAO,        fs_in.TexCoord).r;
     vec3 nrmG  = normalize(fs_in.TBN * (texture(grassNormal, fs_in.TexCoord).xyz*2.0-1.0));
 
-    // Rock
+    // Rock.
     vec3 albR = texture(rockAlbedo,    fs_in.TexCoord).rgb;
     float rouR = texture(rockRoughness, fs_in.TexCoord).r;
     float aoR  = texture(rockAO,        fs_in.TexCoord).r;
     vec3 nrmR  = normalize(fs_in.TBN * (texture(rockNormal, fs_in.TexCoord).xyz*2.0-1.0));
 
-    // Snow
+    // Snow.
     vec3 albS = texture(snowAlbedo,    fs_in.TexCoord).rgb;
     float rouS = texture(snowRoughness, fs_in.TexCoord).r;
     float aoS  = 1.0;
     vec3 nrmS  = normalize(fs_in.TBN * (texture(snowNormal, fs_in.TexCoord).xyz*2.0-1.0));
 
-    // смешиваем параметры
+    // Blend material parameters before lighting.
     vec3  albedo    = wGrass*albG + wRock*albR + wSnow*albS;
     float roughness = wGrass*rouG + wRock*rouR + wSnow*rouS;
     float ao        = wGrass*aoG  + wRock*aoR  + wSnow*aoS;
     vec3  N         = normalize(wGrass*nrmG + wRock*nrmR + wSnow*nrmS);
 
-    // PBR расчёт (Cook‐Torrance) — как раньше
+    // Cook-Torrance PBR lighting.
     vec3 V = normalize(viewPos - fs_in.FragPos);
     vec3 L = normalize(-lightDir);
     vec3 H = normalize(V + L);
 
-    // F0
+    // Base reflectance for dielectric terrain materials.
     vec3 F0 = vec3(0.04);
     vec3 F  = fresnelSchlick(max(dot(H,V),0.0), F0);
 
@@ -147,6 +149,7 @@ void main() {
     vec3 color = ambient + Lo;
 
     if (showErosionHeatmap) {
+        // Red marks erosion, blue marks deposition, and neutral gray marks unchanged ground.
         float eroded = clamp(-fs_in.ErosionDelta * heatmapScale, 0.0, 1.0);
         float deposited = clamp(fs_in.ErosionDelta * heatmapScale, 0.0, 1.0);
         vec3 neutral = vec3(0.16);
@@ -156,7 +159,7 @@ void main() {
         color = mix(color, depositBlue, deposited);
     }
 
-    // тонемап + гамма
+    // Tone map and gamma-correct the final color.
     color = color/(color+vec3(1.0));
     color = pow(color, vec3(1.0/2.2));
 

@@ -1,66 +1,89 @@
-# ===== Visual Studio =====
-# кеш и настройки пользователя
+# Operating systems
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors and IDEs
 .vs/
+.idea/
+.vscode/
 *.suo
 *.user
 *.userosscache
 *.sln.docstates
-
-# Visual C++ intermediate files
-*.idb
-*.pdb
-*.ilk
-*.ipch/
-*.log
-
-# VS project files you don’t need to track
 *.vcxproj.user
 *.vcxproj.filters
 
-# Rider
-.idea/
+# CMake
+/build/
+/build-*/
+/cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+CMakeUserPresets.json
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+CPackConfig.cmake
+CPackSourceConfig.cmake
+compile_commands.json
+_deps/
+/dependencies/imgui/examples/*/Makefile
 
-# ===== Папки сборки и бинарники =====
-# выходные каталоги
-x64/
-Release*/
-Debug*/
-build/
+# Visual C++ and other compiler outputs
+/Debug/
+/Release/
+/x64/
+/Terrain_try/
+[Dd]ebug*/
+[Rr]elease*/
 [Bb]in/
 [Oo]bj/
-
-# временные и объектные файлы
 *.obj
 *.o
-*.dll
-*.exe
-*.lib
+*.lo
+*.idb
+*.pdb
+*.ilk
+*.ipch
+*.pch
 *.exp
 *.map
 *.rsp
+*.sarif
+*.tlog
+*.lastbuildstate
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
 
-# препроцессорные файлы
-*.pch
-*.tmp
-*_i.c
-*_p.c
+# The legacy Visual Studio project uses this bundled x64 GLFW library.
+!dependencies/lib/
+!dependencies/lib/glfw3.lib
 
-# CMake  
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-CTestTestfile.cmake
-Makefile
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
 
-# NuGet
-*.nupkg
-packages/
+# Generated application and analysis data
+/imgui.ini
+/benchmark_results/
+/outputs/*
+!/outputs/.gitkeep
+/presentation/
+*.xlsx
 
-# ===== Прочее =====
+# Temporary files
 *.log
-*.userprefs
-*.ini
-# Benchmark telemetry exports and generated Excel reports
-benchmark_results/
-outputs/
-presentation/
+*.tmp
+*.bak
+*.swp
+*~

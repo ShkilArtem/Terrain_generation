@@ -126,7 +126,7 @@ void Terrain::generate(float amplitude, float frequency, int octaves, float offs
     vertices.reserve(N * N * VERTEX_STRIDE);
     initialHeights.reserve(N * N);
 
-    // 1) генерим позиции, нормали-заглушки, UV, тангенты-заглушки
+    // First pass: write positions, UVs, material hardness, and placeholders for derived vectors.
     for (int z = 0; z < N; ++z) {
         for (int x = 0; x < N; ++x) {
             float u = float(x) / (N - 1);
@@ -166,15 +166,15 @@ void Terrain::generate(float amplitude, float frequency, int octaves, float offs
                 hardnessBase * 0.75f + hardnessDetail * 0.25f
             ));
 
-            // push: pos
+            // Position.
             vertices.insert(vertices.end(), { xPos, yPos, zPos });
-            // normal placeholder
+            // Normal placeholder, filled after triangle indices are known.
             vertices.insert(vertices.end(), { 0.0f, 0.0f, 0.0f });
-            // uv (тайлинг=10)
+            // Tiled UVs for repeated terrain materials.
             vertices.insert(vertices.end(), { u * 10.0f, v * 10.0f });
-            // tangent placeholder
+            // Tangent placeholder.
             vertices.insert(vertices.end(), { 0.0f, 0.0f, 0.0f });
-            // bitangent placeholder
+            // Bitangent placeholder.
             vertices.insert(vertices.end(), { 0.0f, 0.0f, 0.0f });
             // signed erosion heat value: negative=eroded, positive=deposited
             vertices.push_back(0.0f);
@@ -183,7 +183,7 @@ void Terrain::generate(float amplitude, float frequency, int octaves, float offs
         }
     }
 
-    // 2) индексы
+    // Build two triangles per grid cell.
     indices.clear();
     for (int z = 0; z < N - 1; ++z) {
         for (int x = 0; x < N - 1; ++x) {
@@ -196,11 +196,11 @@ void Terrain::generate(float amplitude, float frequency, int octaves, float offs
     }
     indexCount = indices.size();
 
-    // 3) вычисляем нормали и тангенты
+    // Derive smooth normals and tangent space for normal-mapped materials.
     computeNormals();
     computeTangents();
 
-    // 4) заливаем в буферы
+    // Upload the finished vertex/index data to the GPU.
     setupMesh();
 }
 
@@ -217,6 +217,7 @@ void Terrain::computeNormals() {
         };
 
     for (size_t i = 0; i < indices.size(); i += 3) {
+        // Accumulate face normals into each shared vertex for smooth terrain lighting.
         int a = indices[i + 0], b = indices[i + 1], c = indices[i + 2];
         glm::vec3 v0 = pos(a), v1 = pos(b), v2 = pos(c);
         glm::vec3 n = glm::normalize(glm::cross(v2 - v0, v1 - v0));
@@ -250,6 +251,7 @@ void Terrain::computeTangents() {
         };
 
     for (size_t i = 0; i < indices.size(); i += 3) {
+        // Tangents are accumulated per triangle from UV gradients, then averaged per vertex.
         int i0 = indices[i + 0], i1 = indices[i + 1], i2 = indices[i + 2];
         glm::vec3 p0 = pos(i0), p1 = pos(i1), p2 = pos(i2);
         glm::vec2 uv0 = uv(i0), uv1 = uv(i1), uv2 = uv(i2);
@@ -270,7 +272,7 @@ void Terrain::computeTangents() {
     for (int i = 0; i < N * N; ++i) {
         glm::vec3 T = tans[i];
         glm::vec3 Nrm = norm(i);
-        // ортогонализуем
+        // Orthogonalize the tangent so normal maps use a stable tangent basis.
         T = glm::normalize(T - Nrm * glm::dot(Nrm, T));
         glm::vec3 B = glm::normalize(glm::cross(Nrm, T));
 
@@ -290,38 +292,39 @@ void Terrain::setupMesh() {
         indices.data(), GL_STATIC_DRAW);
 
     GLsizei stride = VERTEX_STRIDE * sizeof(float);
-    // aPos
+    // Position.
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0);
-    // aNormal
+    // Normal.
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)(NORMAL_OFFSET * sizeof(float)));
-    // aTexCoord
+    // Texture coordinates.
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*)(UV_OFFSET * sizeof(float)));
-    // aTangent
+    // Tangent.
     glEnableVertexAttribArray(3);
     glVertexAttribPointer(3, 3, GL_FLOAT, GL_FALSE, stride, (void*)(TANGENT_OFFSET * sizeof(float)));
-    // aBitangent
+    // Bitangent.
     glEnableVertexAttribArray(4);
     glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, stride, (void*)((TANGENT_OFFSET + 3) * sizeof(float)));
-    // aErosionDelta
+    // Signed erosion/deposition amount used by the heatmap.
     glEnableVertexAttribArray(5);
     glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, stride, (void*)(EROSION_OFFSET * sizeof(float)));
-    // aHardness
+    // Lithology hardness used by erosion and material blending.
     glEnableVertexAttribArray(6);
     glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, stride, (void*)(HARDNESS_OFFSET * sizeof(float)));
 
     glBindVertexArray(0);
 }
 
-void Terrain::draw(const Shader& shader) const {
+void Terrain::draw(const Shader&) const {
     glBindVertexArray(VAO);
     glDrawElements(GL_TRIANGLES, (GLsizei)indexCount, GL_UNSIGNED_INT, 0);
     glBindVertexArray(0);
 }
 void Terrain::clearErosionHeatmap() {
     const int N = GRID_SIZE;
+    // Only the visualization channel is cleared; heights and normals stay unchanged.
     for (int i = 0; i < N * N; ++i) {
         vertices[i * VERTEX_STRIDE + EROSION_OFFSET] = 0.0f;
     }
@@ -333,10 +336,12 @@ void Terrain::clearErosionHeatmap() {
 void Terrain::resetToInitialTerrain() {
     const int N = GRID_SIZE;
     if (vertices.empty() || initialHeights.size() != static_cast<size_t>(N * N)) {
+        // If the terrain snapshot is unavailable, at least remove stale heatmap colors.
         clearErosionHeatmap();
         return;
     }
 
+    // Restore the saved height field before recomputing all derived vertex vectors.
     for (int i = 0; i < N * N; ++i) {
         vertices[i * VERTEX_STRIDE + POSITION_OFFSET + 1] = initialHeights[i];
         vertices[i * VERTEX_STRIDE + EROSION_OFFSET] = 0.0f;
@@ -344,6 +349,7 @@ void Terrain::resetToInitialTerrain() {
 
     computeNormals();
     computeTangents();
+    // Push the rebuilt terrain to the existing VBO instead of recreating OpenGL buffers.
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(float), vertices.data());
     lastHydraulicTimeMs = 0.0f;
@@ -352,6 +358,7 @@ void Terrain::resetToInitialTerrain() {
 }
 void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
     const int N = GRID_SIZE;
+    // Local accessors keep the erosion math readable while preserving the packed vertex layout.
     auto hRef = [&](int x, int z) -> float& {
         return vertices[(z * N + x) * VERTEX_STRIDE + POSITION_OFFSET + 1];
         };
@@ -371,6 +378,7 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
         float gradZ;
     };
 
+    // Bilinear height sampling lets droplets move continuously instead of snapping to vertices.
     auto sampleHeightGradient = [&](float x, float z) -> HeightGradient {
         x = std::max(0.0f, std::min(static_cast<float>(N - 1) - 0.001f, x));
         z = std::max(0.0f, std::min(static_cast<float>(N - 1) - 0.001f, z));
@@ -400,6 +408,7 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
         return result;
         };
 
+    // Harder lithology resists hydraulic and thermal erosion.
     auto sampleHardness = [&](float x, float z) -> float {
         x = std::max(0.0f, std::min(static_cast<float>(N - 1) - 0.001f, x));
         z = std::max(0.0f, std::min(static_cast<float>(N - 1) - 0.001f, z));
@@ -424,6 +433,7 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
             + h11 * tx * tz;
         };
 
+    // Spread erosion/deposition over the four nearest vertices to avoid sharp artifacts.
     auto applyHeightDelta = [&](float x, float z, float delta) {
         x = std::max(0.0f, std::min(static_cast<float>(N - 1) - 0.001f, x));
         z = std::max(0.0f, std::min(static_cast<float>(N - 1) - 0.001f, z));
@@ -470,6 +480,7 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
     lastAveragePathLength = 0.0f;
     long long totalDropletSteps = 0;
 
+    // Hydraulic erosion: each virtual droplet follows the slope, carries sediment, then evaporates.
     auto hydraulicStart = std::chrono::high_resolution_clock::now();
     for (int iter = 0; iter < iterations; ++iter) {
         float posX = random01() * static_cast<float>(N - 1);
@@ -508,6 +519,7 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
             float capacity = std::max(-heightDelta * capacityScale * water, 0.0f);
 
             if (heightDelta > 0.0f || sediment > capacity) {
+                // Uphill movement or excess sediment causes deposition.
                 float depositAmount = heightDelta > 0.0f
                     ? std::min(sediment, heightDelta)
                     : (sediment - capacity) * depositionRate;
@@ -515,6 +527,7 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
                 applyHeightDelta(posX, posZ, depositAmount);
             }
             else {
+                // Downhill water below capacity erodes softer material more aggressively.
                 float localHardness = sampleHardness(posX, posZ);
                 float erosionMultiplier = std::max(0.08f, 1.0f - localHardness * 0.92f);
                 float erodeAmount = std::min((capacity - sediment) * erosionRate * erosionMultiplier, current.height);
@@ -537,6 +550,7 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
         ? static_cast<float>(totalDropletSteps) / static_cast<float>(iterations)
         : 0.0f;
 
+    // Thermal erosion relaxes cliffs by moving material from steep cells to their neighbors.
     auto thermalStart = std::chrono::high_resolution_clock::now();
     std::vector<float> heightDeltas(N * N, 0.0f);
     const int neighborOffsets[8][2] = {
@@ -586,6 +600,7 @@ void Terrain::simulateErosion(int iterations, const ErosionSettings& settings) {
 
     computeNormals();
     computeTangents();
+    // After erosion changes heights, refresh the GPU buffer so rendering uses the new mesh.
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.size() * sizeof(float), vertices.data());
 }
@@ -609,6 +624,7 @@ void Terrain::exportMetricsToCSV(const std::string& filename, int iterations,
         return vertices[(z * N + x) * VERTEX_STRIDE + EROSION_OFFSET];
         };
 
+    // Slope histograms and hypsometric curves are exported for terrain analysis reports.
     auto computeSlopeBins = [&](auto heightAt) {
         std::array<int, 90> bins{};
         const float spacing = WORLD_SIZE / static_cast<float>(std::max(1, N - 1));
@@ -666,6 +682,7 @@ void Terrain::exportMetricsToCSV(const std::string& filename, int iterations,
     auto hypsometricAbove = computeHypsometricAbove(currentHeightAt);
     auto initialHypsometricAbove = computeHypsometricAbove(initialHeightAt);
 
+    // Existing CSV files are appended unless their header belongs to an older schema.
     bool writeHeader = true;
     bool resetSchema = false;
     {

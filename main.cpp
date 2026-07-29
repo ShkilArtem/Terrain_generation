@@ -4,7 +4,8 @@
 #include <ctime>
 #include <chrono>
 #include <cmath>
-#include <direct.h>
+#include <filesystem>
+#include <string>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -17,7 +18,7 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
-// размеры окна
+// Default window size for the OpenGL viewport.
 const unsigned SCR_W = 1920, SCR_H = 1080;
 
 void framebuffer_size_callback(GLFWwindow*, int w, int h) {
@@ -30,9 +31,9 @@ float lastX = SCR_W * 0.5f;
 float lastY = SCR_H * 0.5f;
 
 Camera camera;
-const char* ANALYSIS_DIR = "D:\\School bullshits\\TIPE\\Terrain analysis";
-const char* BENCHMARK_CSV_PATH = "D:\\School bullshits\\TIPE\\Terrain analysis\\terrain_metrics_v2.csv";
-const char* SWEEP_CSV_PATH = "D:\\School bullshits\\TIPE\\Terrain analysis\\parameter_sweep_report_v2.csv";
+const std::filesystem::path ANALYSIS_DIR = "outputs/benchmark_results";
+const std::string BENCHMARK_CSV_PATH = (ANALYSIS_DIR / "terrain_metrics_v2.csv").string();
+const std::string SWEEP_CSV_PATH = (ANALYSIS_DIR / "parameter_sweep_report_v2.csv").string();
 
 void mouse_callback(GLFWwindow* /*wnd*/, double xpos, double ypos) {
     ImGuiIO& io = ImGui::GetIO();
@@ -56,7 +57,7 @@ void mouse_callback(GLFWwindow* /*wnd*/, double xpos, double ypos) {
 int main() {
 
     srand(static_cast<unsigned>(time(nullptr)));
-    // GLFW
+    // Initialize the OpenGL window and input callbacks.
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -73,7 +74,7 @@ int main() {
 
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
-    // GLAD
+    // Load OpenGL entry points and enable depth testing for 3D terrain.
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
         std::cerr << "Failed GLAD\n"; return -1;
     }
@@ -81,20 +82,17 @@ int main() {
 
     glFrontFace(GL_CW);
 
-    // ImGui
+    // Initialize the immediate-mode UI used for live terrain tuning.
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330 core");
 
-    // камера
-    
-
-    // шейдеры
+    // Shader program used by the terrain renderer.
     Shader terrainShader("shaders/terrain.vert", "shaders/terrain.frag");
 
-    // террейн
+    // Generate the initial terrain mesh from layered Perlin noise.
     Terrain terrain(128, 64.0f);
     float terrainAmplitude = 42.0f;
     float terrainFrequency = 0.035f;
@@ -106,7 +104,7 @@ int main() {
     terrain.generate(terrainAmplitude, terrainFrequency, terrainOctaves, terrainOffset,
         terrainPersistence, terrainLacunarity, terrainHeightPower);
 
-    // текстуры
+    // Load a 2D texture and choose the OpenGL format from its channel count.
     auto loadTex = [&](const char* path) -> GLuint {
         int w, h, n;
         unsigned char* data = stbi_load(path, &w, &h, &n, 0);
@@ -119,7 +117,7 @@ int main() {
         if (n == 1) {
             internalFormat = GL_R8;
             format = GL_RED;
-            // важно для 1-байтовых строк:
+            // Single-channel textures need byte alignment to avoid row padding issues.
             glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         }
         else if (n == 3) {
@@ -131,7 +129,6 @@ int main() {
             format = GL_RGBA;
         }
         else {
-            // неожиданный формат
             stbi_image_free(data);
             std::cerr << "Unsupported channels: " << n << " in " << path << "\n";
             return 0;
@@ -144,7 +141,7 @@ int main() {
             w, h, 0, format, GL_UNSIGNED_BYTE, data);
         glGenerateMipmap(GL_TEXTURE_2D);
 
-        // ваши привычные параметры
+        // Repeating mipmapped textures keep the terrain surface detailed at distance.
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
@@ -155,27 +152,24 @@ int main() {
         };
 
 
-    //Grass
+    // Grass material texture set.
     GLuint grassAlbedoTex = loadTex("textures/Grass004_1K_JPG_Color.jpg");
     GLuint grassNormalTex = loadTex("textures/Grass004_1K_JPG_NormalGL.jpg");
     GLuint grassRoughnessTex = loadTex("textures/Grass004_1K_JPG_Roughness.jpg");
     GLuint grassAOTex = loadTex("textures/Grass004_1K_JPG_AmbientOcclusion.jpg");
-    //Rock
+    // Rock material texture set.
     GLuint rockAlbedoTex = loadTex("textures/rock_surface_diff_1k.jpg");
     GLuint rockNormalTex = loadTex("textures/rock_surface_nor_gl_1k.jpg");
     GLuint rockRoughnessTex = loadTex("textures/rock_surface_rough_1k.jpg");
     GLuint rockAOTex = loadTex("textures/rock_surface_ao_1k.jpg");
-    //Snow
+    // Snow material texture set.
     GLuint snowAlbedoTex = loadTex("textures/Snow004_1K-JPG_Color.jpg");
     GLuint snowNormalTex = loadTex("textures/Snow004_1K-JPG_NormalGL.jpg");
     GLuint snowRoughnessTex = loadTex("textures/Snow004_1K-JPG_Roughness.jpg");
 
-
-    // shadow map setup omitted for brevity...
-    // lightSpaceMatrix, FBO и depthTexture надо создать здесь
-
-    float sunElevationDeg = 15.0f;               // угол возвышения над горизонтом
-    float sunAzimuthDeg = 0.0f;               // направление по горизонтали (по желанию)
+    // Lighting and material transition parameters exposed in the control panel.
+    float sunElevationDeg = 15.0f;
+    float sunAzimuthDeg = 0.0f;
     float ambientIntensity = 0.23f;
     float diffuseIntensity = 4.4f;
     float specularIntensity = 0.4f;
@@ -202,6 +196,7 @@ int main() {
         "Capacity Scale",
         "Iteration Count"
     };
+    // Sweep state is kept outside the UI block so each frame can advance one experiment step.
     int sweepTargetParameter = 0;
     float sweepStartValue = 0.0f;
     float sweepEndValue = 1.0f;
@@ -222,6 +217,7 @@ int main() {
 
     float el = glm::radians(sunElevationDeg);
     float az = glm::radians(sunAzimuthDeg);
+    // Convert elevation/azimuth controls into a normalized world-space light direction.
     glm::vec3 L = glm::normalize(glm::vec3(
         cos(el) * cos(az),
         sin(el),
@@ -231,20 +227,20 @@ int main() {
 
 
 
-    // цикл
+    // Main application loop: handle input, update simulations, draw terrain and UI.
     while (!glfwWindowShouldClose(window)) {
         float current = (float)glfwGetTime();
         static float lastTime = current;
         float deltaTime = current - lastTime;
         lastTime = current;
 
-        // ввод
+        // Camera input: right mouse captures the cursor, WASD moves through the scene.
         glfwPollEvents();
         if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
             if (!mouseCaptured) {
                 mouseCaptured = true;
                 glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-                firstMouse = true;  // сбросим дельту мыши, чтобы избежать рывка
+                firstMouse = true;  // Reset mouse delta to prevent a camera jump.
             }
         }
         else {
@@ -262,7 +258,7 @@ int main() {
         if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
             camera.ProcessKeyboard(RIGHT, deltaTime);
 
-        // ImGui
+        // Build all ImGui panels before the terrain render pass.
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
@@ -289,6 +285,7 @@ int main() {
                     terrainChanged = true;
                 }
                 if (terrainChanged) {
+                    // Rebuilding the mesh also resets live erosion because the base height field changed.
                     terrain.generate(terrainAmplitude, terrainFrequency, terrainOctaves, terrainOffset,
                         terrainPersistence, terrainLacunarity, terrainHeightPower);
                     liveErosionIterations = 0;
@@ -325,6 +322,7 @@ int main() {
                     erosionSettings = Terrain::ErosionSettings();
                 }
                 if (ImGui::Button("Run Benchmark & Export CSV")) {
+                    // Benchmark uses the current UI settings, then records generation and erosion timings.
                     auto genStart = std::chrono::high_resolution_clock::now();
                     terrain.generate(terrainAmplitude, terrainFrequency, terrainOctaves, terrainOffset,
                         terrainPersistence, terrainLacunarity, terrainHeightPower);
@@ -335,20 +333,21 @@ int main() {
                     terrain.simulateErosion(erosionIterationsPerFrame, erosionSettings);
                     lastBenchmarkErosionMs = terrain.getLastHydraulicTimeMs();
                     lastBenchmarkThermalMs = terrain.getLastThermalTimeMs();
-                    _mkdir(ANALYSIS_DIR);
+                    std::filesystem::create_directories(ANALYSIS_DIR);
                     terrain.exportMetricsToCSV(BENCHMARK_CSV_PATH, erosionIterationsPerFrame,
                         lastBenchmarkGenMs, lastBenchmarkErosionMs, lastBenchmarkThermalMs,
                         terrain.getLastAveragePathLength(), 0.0f, "Baseline");
                     benchmarkExported = true;
                 }
                 if (benchmarkExported) {
-                    ImGui::Text("CSV: %s", BENCHMARK_CSV_PATH);
+                    ImGui::Text("CSV: %s", BENCHMARK_CSV_PATH.c_str());
                     ImGui::Text("Gen %.2f ms | Hydraulic %.2f ms | Thermal %.2f ms",
                         lastBenchmarkGenMs, lastBenchmarkErosionMs, lastBenchmarkThermalMs);
                 }
             }
 
             if (ImGui::CollapsingHeader("Visualization", ImGuiTreeNodeFlags_DefaultOpen)) {
+                // The heatmap colors signed height deltas without changing the terrain geometry.
                 ImGui::Checkbox("Erosion heatmap", &showErosionHeatmap);
                 ImGui::SliderFloat("Heatmap intensity", &heatmapScale, 1.0f, 80.0f);
                 if (ImGui::Button("Clear heatmap")) {
@@ -374,6 +373,7 @@ int main() {
 
             ImGui::End();
 
+            // Automated sweeps compare one erosion parameter at a time while holding the others fixed.
             ImGui::Begin("Geological Analysis & Parameter Sweep");
             ImGui::Combo("Target Parameter", &sweepTargetParameter, sweepParameterNames, IM_ARRAYSIZE(sweepParameterNames));
             if (sweepTargetParameter == 0 || sweepTargetParameter == 2) {
@@ -409,7 +409,7 @@ int main() {
             ImGui::SliderFloat("Baseline min water", &sweepBaselineSettings.minWater, 0.0f, 0.5f);
 
             if (!sweepRunning && ImGui::Button("Execute Automated Parameter Sweep")) {
-                _mkdir(ANALYSIS_DIR);
+                std::filesystem::create_directories(ANALYSIS_DIR);
                 sweepRunning = true;
                 sweepCompleted = false;
                 sweepCurrentStep = 0;
@@ -420,6 +420,7 @@ int main() {
                 ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f),
                     "Running Sweep Simulation Step %d/%d...", sweepCurrentStep + 1, totalSteps);
 
+                // Interpolate the selected parameter from start to end across the requested steps.
                 float stepSize = (totalSteps > 1)
                     ? (sweepEndValue - sweepStartValue) / static_cast<float>(totalSteps - 1)
                     : 0.0f;
@@ -436,6 +437,7 @@ int main() {
 
                 const int activeGridSize = sweepGridSize;
                 int activeIterations = sweepIterations;
+                // Iteration count is special: it changes the simulation length, not an erosion coefficient.
                 if (sweepTargetParameter == 4) {
                     activeIterations = std::max(1, static_cast<int>(std::round(sweepLastExperimentalValue)));
                     sweepLastExperimentalValue = static_cast<float>(activeIterations);
@@ -448,6 +450,7 @@ int main() {
                 glFlush();
                 Terrain sweepTerrain(activeGridSize, 64.0f);
                 auto sweepGenStart = std::chrono::high_resolution_clock::now();
+                // Each sweep step uses a fresh terrain so results are comparable across parameter values.
                 sweepTerrain.generate(terrainAmplitude, terrainFrequency, terrainOctaves, terrainOffset,
                     terrainPersistence, terrainLacunarity, terrainHeightPower);
                 sweepTerrain.clearErosionHeatmap();
@@ -461,6 +464,7 @@ int main() {
                 if (sweepTargetParameter == 3) testSettings.capacityScale = sweepLastExperimentalValue;
 
                 std::srand(1337);
+                // Fixed random seed keeps droplet paths reproducible between sweep steps.
                 sweepTerrain.simulateErosion(activeIterations, testSettings);
                 glfwPollEvents();
                 glFlush();
@@ -479,20 +483,21 @@ int main() {
             }
 
             if (sweepCompleted) {
-                ImGui::Text("Sweep CSV: %s", SWEEP_CSV_PATH);
+                ImGui::Text("Sweep CSV: %s", SWEEP_CSV_PATH.c_str());
             }
             ImGui::Text("Last value %.4f | Gen %.2f ms | Hydraulic %.2f ms | Thermal %.2f ms",
                 sweepLastExperimentalValue, sweepLastGenMs, sweepLastHydraulicMs, sweepLastThermalMs);
             ImGui::End();
 
-            float el = glm::radians(sunElevationDeg);
-            float az = glm::radians(sunAzimuthDeg);
-            glm::vec3 L = glm::normalize(glm::vec3(
-                cos(el) * cos(az),
-                sin(el),
-                cos(el) * sin(az)
+            float currentElevationRadians = glm::radians(sunElevationDeg);
+            float currentAzimuthRadians = glm::radians(sunAzimuthDeg);
+            // Recompute sunlight after UI edits so lighting responds immediately.
+            glm::vec3 currentSunDirection = glm::normalize(glm::vec3(
+                cos(currentElevationRadians) * cos(currentAzimuthRadians),
+                sin(currentElevationRadians),
+                cos(currentElevationRadians) * sin(currentAzimuthRadians)
             ));
-            sunDir = L;
+            sunDir = currentSunDirection;
 
             if (erosionRunning) {
                 terrain.simulateErosion(erosionIterationsPerFrame, erosionSettings);
@@ -501,12 +506,12 @@ int main() {
         }
 
 
-        // рендер
+        // Render pass: clear the frame, bind uniforms/textures, then draw the terrain.
         glClearColor(0.1f, 0.1f, 0.2f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         terrainShader.use();
-        // задаём uniform'ы: model, view, proj, lightSpaceMatrix, sun, viewPos и текстурные блоки
+        // Camera matrices are updated every frame because the user can fly freely.
         glm::mat4 model = glm::mat4(1.0f);
         glm::mat4 view = camera.GetViewMatrix();
         glm::mat4 proj = glm::perspective(glm::radians(camera.Zoom),
@@ -515,15 +520,10 @@ int main() {
         terrainShader.setMat4("model", model);
         terrainShader.setMat4("view", view);
         terrainShader.setMat4("projection", proj);
-        // shadow map и параметры солнца нужно тоже сюда
-
-        // позиция камеры в шейдер
+        // View position is needed by the PBR shader for specular highlights.
         terrainShader.setVec3("viewPos", camera.Position);
 
-
-
-
-        // параметры направленного света (Солнце)
+        // Directional sunlight and terrain-material controls.
         terrainShader.setVec3("lightDir", sunDir);
         terrainShader.setVec3("lightColor", sunColor * diffuseIntensity);
         terrainShader.setFloat("ambientFactor", ambientIntensity);
@@ -535,9 +535,7 @@ int main() {
         terrainShader.setBool("showErosionHeatmap", showErosionHeatmap);
         terrainShader.setFloat("heatmapScale", heatmapScale);
 
-        // текстуры
-        
-        // Grass
+        // Bind grass textures.
         terrainShader.setInt("grassAlbedo", 0);
         terrainShader.setInt("grassNormal", 1);
         terrainShader.setInt("grassRoughness", 2);
@@ -547,7 +545,7 @@ int main() {
         glActiveTexture(GL_TEXTURE2);  glBindTexture(GL_TEXTURE_2D, grassRoughnessTex);
         glActiveTexture(GL_TEXTURE3);  glBindTexture(GL_TEXTURE_2D, grassAOTex);
 
-        // Rock
+        // Bind rock textures.
         terrainShader.setInt("rockAlbedo", 4);
         terrainShader.setInt("rockNormal", 5);
         terrainShader.setInt("rockRoughness", 6);
@@ -557,7 +555,7 @@ int main() {
         glActiveTexture(GL_TEXTURE6);  glBindTexture(GL_TEXTURE_2D, rockRoughnessTex);
         glActiveTexture(GL_TEXTURE7);  glBindTexture(GL_TEXTURE_2D, rockAOTex);
 
-        // Snow
+        // Bind snow textures.
         terrainShader.setInt("snowAlbedo", 8);
         terrainShader.setInt("snowNormal", 9);
         terrainShader.setInt("snowRoughness", 10);
@@ -574,7 +572,7 @@ int main() {
         glfwSwapBuffers(window);
     }
 
-    // очистка
+    // Release UI, window, and GLFW resources in reverse setup order.
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
